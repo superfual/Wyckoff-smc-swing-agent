@@ -13,12 +13,22 @@ def _series(step: int, count: int, end_time: int, close: float = 100.0):
     return [Candle(start + i * step, close, close + 1, close - 1, close, 10.0) for i in range(count)]
 
 
-def _market(symbol: str, decision_time: int, *, stale_reference: bool = False, include_open: bool = False):
+def _market(
+    symbol: str,
+    decision_time: int,
+    *,
+    stale_reference: bool = False,
+    include_open: bool = False,
+    daily_count: int = 20,
+    four_hour_count: int = 30,
+    one_hour_count: int = 40,
+    fifteen_count: int = 8,
+):
     reference_end = decision_time - HOUR if stale_reference else decision_time
-    daily = _series(DAY, 2, decision_time)
-    four_hour = _series(4 * HOUR, 3, decision_time)
-    one_hour = _series(HOUR, 4, reference_end)
-    fifteen = _series(15 * 60_000, 8, decision_time)
+    daily = _series(DAY, daily_count, decision_time)
+    four_hour = _series(4 * HOUR, four_hour_count, decision_time)
+    one_hour = _series(HOUR, one_hour_count, reference_end)
+    fifteen = _series(15 * 60_000, fifteen_count, decision_time)
     if include_open:
         daily.append(Candle(decision_time, 100, 101, 99, 100, 10))
         four_hour.append(Candle(decision_time, 100, 101, 99, 100, 10))
@@ -47,6 +57,15 @@ def _runtime(tmp_path, symbols=("BTCUSDT",)):
     )
 
 
+def _live_runtime_config():
+    return PaperRuntimeConfig(
+        checkpoint_path="state/live-test.json",
+        auto_recover=True,
+        checkpoint_after_cycle=True,
+        require_all_symbols=True,
+    )
+
+
 def test_live_safe_host_config_is_exact_closed_candle_spot():
     cfg = live_binance_paper_host_config()
     assert cfg.agent.trading_mode == "SPOT"
@@ -58,7 +77,7 @@ def test_live_safe_host_config_is_exact_closed_candle_spot():
 
 
 def test_preflight_passes_fresh_complete_feed_without_mutating_runtime(tmp_path):
-    decision_time = 10 * DAY
+    decision_time = 100 * DAY
     runtime = _runtime(tmp_path)
     before_session = runtime.session.to_dict()
     before_state = runtime.runner_state.to_dict()
@@ -67,36 +86,27 @@ def test_preflight_passes_fresh_complete_feed_without_mutating_runtime(tmp_path)
         runtime,
         Provider([_market("BTCUSDT", decision_time)]),
         decision_time=decision_time,
-        runtime_config=PaperRuntimeConfig(
-            checkpoint_path="state/live-test.json",
-            auto_recover=True,
-            checkpoint_after_cycle=True,
-            require_all_symbols=True,
-        ),
+        runtime_config=_live_runtime_config(),
         runner_config=PaperRunnerConfig(require_exact_reference_close=True),
     )
 
     assert result.ready is True
     assert result.blockers == ()
     assert result.symbols[0].valid is True
-    assert result.symbols[0].warnings == ()
+    assert result.symbols[0].history.ready is True
+    assert "1D_MA200_UNAVAILABLE_NOT_REQUIRED_BY_V1" in result.symbols[0].warnings
     assert runtime.session.to_dict() == before_session
     assert runtime.runner_state.to_dict() == before_state
 
 
 def test_preflight_treats_current_open_binance_candle_as_expected_warning(tmp_path):
-    decision_time = 10 * DAY
+    decision_time = 100 * DAY
     runtime = _runtime(tmp_path)
     result = validate_binance_live_paper_feed(
         runtime,
         Provider([_market("BTCUSDT", decision_time, include_open=True)]),
         decision_time=decision_time,
-        runtime_config=PaperRuntimeConfig(
-            checkpoint_path="state/live-test.json",
-            auto_recover=True,
-            checkpoint_after_cycle=True,
-            require_all_symbols=True,
-        ),
+        runtime_config=_live_runtime_config(),
         runner_config=PaperRunnerConfig(require_exact_reference_close=True),
     )
 
@@ -104,23 +114,38 @@ def test_preflight_treats_current_open_binance_candle_as_expected_warning(tmp_pa
     symbol = result.symbols[0]
     assert symbol.valid is True
     assert symbol.blockers == ()
+    assert symbol.history.ready is True
     assert dict(symbol.open_candle_counts) == {"1d": 1, "4h": 1, "1h": 1, "15m": 1}
     assert "EXPECTED_OPEN_CANDLE_DROPPED:1h:1" in symbol.warnings
     assert dict(symbol.raw_candle_counts)["1h"] == dict(symbol.candle_counts)["1h"] + 1
 
 
+def test_preflight_blocks_insufficient_strategy_history(tmp_path):
+    decision_time = 100 * DAY
+    runtime = _runtime(tmp_path)
+    result = validate_binance_live_paper_feed(
+        runtime,
+        Provider([_market("BTCUSDT", decision_time, daily_count=19)]),
+        decision_time=decision_time,
+        runtime_config=_live_runtime_config(),
+        runner_config=PaperRunnerConfig(require_exact_reference_close=True),
+    )
+
+    assert result.ready is False
+    symbol = result.symbols[0]
+    assert symbol.history.ready is False
+    assert "INSUFFICIENT_HISTORY:SCANNER:1d:19<20" in symbol.blockers
+    assert "BTCUSDT:INSUFFICIENT_HISTORY:SCANNER:1d:19<20" in result.blockers
+
+
 def test_preflight_blocks_stale_reference_candle(tmp_path):
-    decision_time = 10 * DAY
+    decision_time = 100 * DAY
     runtime = _runtime(tmp_path)
     result = validate_binance_live_paper_feed(
         runtime,
         Provider([_market("BTCUSDT", decision_time, stale_reference=True)]),
         decision_time=decision_time,
-        runtime_config=PaperRuntimeConfig(
-            checkpoint_path="state/live-test.json",
-            auto_recover=True,
-            checkpoint_after_cycle=True,
-        ),
+        runtime_config=_live_runtime_config(),
         runner_config=PaperRunnerConfig(require_exact_reference_close=True),
     )
 
@@ -129,18 +154,13 @@ def test_preflight_blocks_stale_reference_candle(tmp_path):
 
 
 def test_preflight_blocks_missing_symbol(tmp_path):
-    decision_time = 10 * DAY
+    decision_time = 100 * DAY
     runtime = _runtime(tmp_path, symbols=("BTCUSDT", "ETHUSDT"))
     result = validate_binance_live_paper_feed(
         runtime,
         Provider([_market("BTCUSDT", decision_time)]),
         decision_time=decision_time,
-        runtime_config=PaperRuntimeConfig(
-            checkpoint_path="state/live-test.json",
-            auto_recover=True,
-            checkpoint_after_cycle=True,
-            require_all_symbols=True,
-        ),
+        runtime_config=_live_runtime_config(),
         runner_config=PaperRunnerConfig(require_exact_reference_close=True),
     )
 
@@ -158,12 +178,8 @@ def test_preflight_provider_error_is_non_mutating_and_explicit(tmp_path):
     result = validate_binance_live_paper_feed(
         runtime,
         Broken(),
-        decision_time=10 * DAY,
-        runtime_config=PaperRuntimeConfig(
-            checkpoint_path="state/live-test.json",
-            auto_recover=True,
-            checkpoint_after_cycle=True,
-        ),
+        decision_time=100 * DAY,
+        runtime_config=_live_runtime_config(),
         runner_config=PaperRunnerConfig(require_exact_reference_close=True),
     )
 
