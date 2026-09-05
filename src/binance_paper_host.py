@@ -278,6 +278,7 @@ def render_binance_control_room_output(output: BinanceControlRoomOutput) -> str:
     lines = [
         f"BINANCE SPOT CONTROL ROOM: {output.status}",
         f"Decision time: {acquisition.decision_time} | Mode: PAPER ONLY",
+        "Safety: CLOSED CANDLES ONLY | NO LOOK-AHEAD | REAL ORDERS DISABLED",
         (
             f"Acquisition: {len(acquisition.completed_symbols)}/{len(acquisition.expected_symbols)} symbols | "
             f"failures={len(acquisition.failures)}"
@@ -291,6 +292,14 @@ def render_binance_control_room_output(output: BinanceControlRoomOutput) -> str:
         )
         if validation.blockers:
             lines.append("Blockers: " + "; ".join(validation.blockers))
+        for item in validation.symbols:
+            score = "n/a" if item.scan is None else f"{item.scan.score:.1f}"
+            classification = "n/a" if item.scan is None else item.scan.classification
+            action = item.decision.action if item.decision is not None else item.status
+            lines.append(
+                f"  {item.rank or '-':>2} {item.symbol} | score={score} | "
+                f"class={classification} | action={action}"
+            )
     if output.report is not None:
         report = output.report
         lines.append(

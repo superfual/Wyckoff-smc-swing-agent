@@ -182,6 +182,14 @@ The configured 12-symbol Spot watchlist is:
   - latest closed reference-candle price supplied to paper decisions
   - concise acquisition/preflight/cycle/portfolio control-room reporting
   - regression coverage for session, cash, positions, runner state, and checkpoint immutability
+- Reproducible hackathon control-room demo packaged with:
+  - `python scripts/run_control_room_demo.py` one-command offline execution
+  - the real acquisition/preflight/analysis/Spot-guard/paper-runtime path
+  - deterministic injected read-only Binance MCP responses for CI and reviewers
+  - ranked scanner and defensive action output
+  - explicit PAPER ONLY, closed-candle, no-lookahead, and real-orders-disabled labels
+  - optional live `module:function` MCP callback injection without stored credentials
+  - README quickstart and a 90-second submission/video checklist
 
 ## Verified BTC checkpoints
 
@@ -276,28 +284,26 @@ These market values are a time-specific validation checkpoint, not golden tradin
 
 Latest completed implementation baseline:
 
-- Parent commit before the current host-integration change: `5ed0d1d98486982bbd70e84db33db055768b07e3`
-- Parent message: `Add rate-aware Binance watchlist acquisition`
-- Local suite with the current host integration: `281 passed`
+- Parent commit before the current demo-packaging change: `752af6a8365031a6429660e41d406d3eb0b652c2`
+- Parent message: `Integrate acquisition into Binance paper host`
+- Local suite with the current demo packaging: `284 passed`
 - Parent GitHub Actions workflow `Tests`: success
-- Parent CI run: `33990069681`
+- Parent CI run: `33991376593`
 
 Always inspect the current `main` commit and latest CI instead of assuming this baseline is still latest.
 
 ## NEXT STEP
 
-### Package the final hackathon control-room demo
+### Record and submit the final hackathon demo
 
-Turn the completed safe host path into a reproducible, judge-friendly demo:
+Use the completed reproducible package to finish the judge-facing submission:
 
-1. Add a small CLI/demo runner around `run_binance_control_room_cycle` with an injected MCP tool boundary.
-2. Show acquisition status, preflight status, ranking, defensive Spot action, and paper portfolio summary.
-3. Include explicit `PAPER ONLY`, closed-candle, no-lookahead, and no-real-orders labels in output.
-4. Add a deterministic offline demo mode for CI and reviewer reproduction.
-5. Document the live Binance MCP host integration contract without embedding credentials.
-6. Update README quickstart, architecture, and hackathon demo flow.
-7. Prepare a concise submission checklist and video narration around the validated safety story.
-8. Keep real Binance MCP calls outside CI and preserve the injected fake transport in tests.
+1. Run one final read-only Binance MCP watchlist/control-room capture outside CI.
+2. Record the 90-second flow in `docs/SUBMISSION_CHECKLIST.md`.
+3. Show the public repository, one-command offline demo, and latest green CI.
+4. Add the final demo-video URL and exact submission fields once available.
+5. Recheck the event deadline, survey, and required social tasks before submission.
+6. Freeze V1 after the submission commit; defer alerts and real execution to post-hackathon work.
 
 Do not expand to autonomous execution. Do not send exchange orders.
 

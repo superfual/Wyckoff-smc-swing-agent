@@ -6,6 +6,37 @@
 
 ---
 
+## Run the deterministic demo
+
+From the repository root (Python 3.11+; no API key required):
+
+```bash
+python scripts/run_control_room_demo.py
+```
+
+The command runs the real acquisition → preflight → analysis → Spot guard →
+paper-cycle path against a deterministic, read-only Binance MCP callback. It
+prints watchlist ranking, defensive actions, checkpoint status, and portfolio
+state. The expected safety banner is:
+
+```text
+Mode: PAPER ONLY
+Safety: CLOSED CANDLES ONLY | NO LOOK-AHEAD | REAL ORDERS DISABLED
+```
+
+Run the complete regression suite with:
+
+```bash
+python -m pytest -q
+```
+
+Live market data remains host-injected and read-only. The CLI accepts a callback
+as `--tool-call module:function`; no credentials or exchange-order functions are
+stored in this repository. See [the submission checklist](docs/SUBMISSION_CHECKLIST.md)
+for the judge-facing demo flow.
+
+---
+
 ## 🎯 Problem
 
 Swing trading crypto is not simply about finding a coin that may go up.
@@ -411,13 +442,13 @@ A lightweight screen can first identify which assets deserve deeper reasoning.
                NO_TRADE     WATCH     BUY_READY
                                          │
                                          ↓
-                               HUMAN CONFIRMATION
+                                  PAPER GUARD
                                          │
                                          ↓
-                                  BINANCE ACTION
+                                  PAPER ACTION
                                          │
                                          ↓
-                                 POSITION OPEN
+                              PAPER POSITION OPEN
                                          │
                                          ↓
                                    MONITORING
@@ -431,10 +462,10 @@ A lightweight screen can first identify which assets deserve deeper reasoning.
                                                 EXIT_READY
                                                      │
                                                      ↓
-                                            HUMAN CONFIRMATION
+                                               PAPER GUARD
                                                      │
                                                      ↓
-                                                   CLOSED
+                                             PAPER POSITION CLOSED
 ```
 
 ---
@@ -566,7 +597,8 @@ The asset is structurally interesting, but the setup is incomplete or the desire
 
 A Spot long setup has sufficient Wyckoff context, SMC confirmation, defined invalidation, and acceptable trade structure.
 
-BUY_READY does **not** mean automatic execution.
+BUY_READY does **not** mean automatic execution. In V1 it can only become a
+paper-trading action; this repository has no real exchange-order path.
 
 ### 🟡 HOLD
 
@@ -686,7 +718,7 @@ DECISION:
 BUY_READY
 
 EXECUTION:
-WAITING_FOR_USER_CONFIRMATION
+PAPER ONLY / REAL ORDERS DISABLED
 ```
 
 ---
@@ -780,9 +812,9 @@ MCP is a capability used by the agent.
 
 ---
 
-## 🛡️ Human-in-the-Loop Safety
+## 🛡️ Paper-Only Safety
 
-The V1 hackathon agent is autonomous in analysis but human-controlled in execution.
+The V1 hackathon agent is autonomous in analysis but **paper-only in execution**.
 
 The agent may autonomously:
 
@@ -795,19 +827,20 @@ The agent may autonomously:
 - Monitor existing positions
 - Generate EXIT_READY signals
 
-However, trading actions require explicit user confirmation.
+No user phrase can authorize a real trade because the repository exposes no
+account, credential, wallet, transfer, or exchange-order method.
 
 ```text
 BUY_READY
     ↓
-WAITING_FOR_USER_CONFIRMATION
+SPOT EXECUTION GUARD
     ↓
-USER EXPLICITLY APPROVES
+PAPER RUNTIME
     ↓
-BINANCE ACTION
+VIRTUAL POSITION ONLY
 ```
 
-The same principle applies to exits.
+The same principle applies to exits. Real execution is outside V1 scope.
 
 Casual responses such as:
 
@@ -907,8 +940,18 @@ Decision:
 BUY_READY
 
 Execution:
-WAITING_FOR_USER_CONFIRMATION
+PAPER ONLY / REAL ORDERS DISABLED
 ```
+
+The deterministic control-room demo is available directly:
+
+```bash
+python scripts/run_control_room_demo.py
+```
+
+It intentionally permits `WATCH`, `BLOCKED`, `AVOID_BUY`, and `SCANNED_ONLY`
+outcomes. A demo with no BUY is valid evidence that capital preservation outranks
+trading frequency.
 
 The demo can additionally show:
 
