@@ -1,0 +1,67 @@
+{
+  "name": "default-spot-swing-watchlist",
+  "description": "Curated Binance Spot watchlist for the Wyckoff + SMC Spot Swing Agent.",
+  "quote_asset": "USDT",
+  "symbols": [
+    {
+      "symbol": "BTCUSDT",
+      "enabled": true,
+      "priority": "HIGH"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "enabled": true,
+      "priority": "HIGH"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "enabled": true,
+      "priority": "HIGH"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "enabled": true,
+      "priority": "HIGH"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "LINKUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    },
+    {
+      "symbol": "AAVEUSDT",
+      "enabled": true,
+      "priority": "MEDIUM"
+    }
+  ]
+}
