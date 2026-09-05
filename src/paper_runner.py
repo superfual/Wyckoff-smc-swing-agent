@@ -6,6 +6,11 @@ Consumes normalized MarketData snapshots supplied by an external market-data
 adapter, strips candles that are not closed at decision time, and feeds the
 result into the shared PaperSession with portfolio-level entry safety guards.
 
+V1.1 adds same-cycle fairness for fresh Spot entries: active positions/pending
+orders are serviced first, then all fresh symbols are pre-analyzed against the
+same portfolio baseline and ranked by setup quality before portfolio slots are
+allocated. This removes watchlist/input ordering as the primary allocator.
+
 This module performs no network requests, stores no credentials and sends no
 exchange orders.
 """
@@ -18,7 +23,7 @@ from typing import Literal
 try:
     from .execution import ExecutionConfig
     from .market_data import Candle, MarketData
-    from .orchestrator import AgentConfig
+    from .orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from .paper_session import PaperSession, process_session_snapshot
     from .paper_trading import PaperStepResult, PaperTradingConfig
     from .portfolio_safety import PortfolioSafetyConfig
@@ -26,7 +31,7 @@ try:
 except ImportError:
     from execution import ExecutionConfig
     from market_data import Candle, MarketData
-    from orchestrator import AgentConfig
+    from orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from paper_session import PaperSession, process_session_snapshot
     from paper_trading import PaperStepResult, PaperTradingConfig
     from portfolio_safety import PortfolioSafetyConfig
@@ -44,6 +49,7 @@ class PaperRunnerConfig:
     require_reference_candle: bool = True
     require_exact_reference_close: bool = False
     continue_on_symbol_error: bool = True
+    fair_same_cycle_allocation: bool = True
 
 
 @dataclass
@@ -108,6 +114,79 @@ def _reference_close_time(market: MarketData, timeframe: str) -> int | None:
     return candles[-1].timestamp + _TIMEFRAME_MS[timeframe]
 
 
+def _portfolio_exposure_pct(session: PaperSession) -> float:
+    if session.equity <= 0:
+        return 0.0
+    quote = sum(
+        account.open_position.position_size_quote
+        for account in session.accounts.values()
+        if account.open_position is not None
+    )
+    return quote / session.equity * 100
+
+
+def _has_active_lifecycle(session: PaperSession, symbol: str) -> bool:
+    account = session.accounts.get(symbol)
+    return bool(account and (account.open_position is not None or account.pending_entry_price is not None))
+
+
+def _pre_analyze_fresh(
+    session: PaperSession,
+    market: MarketData,
+    *,
+    agent_config: AgentConfig | None,
+    risk_config: RiskConfig | None,
+    execution_config: ExecutionConfig | None,
+) -> AgentDecision:
+    account = session.accounts.get(market.symbol)
+    cooldown_active = bool(account and account.cooldown_bars_remaining > 0)
+    return analyze_symbol(
+        market,
+        account_equity=session.equity,
+        current_portfolio_exposure_pct=_portfolio_exposure_pct(session),
+        has_open_position=False,
+        cooldown_active=cooldown_active,
+        config=agent_config,
+        risk_config=risk_config,
+        execution_config=execution_config,
+    )
+
+
+def _candidate_rank(decision: AgentDecision) -> tuple[float, float, float, str]:
+    """Higher quality first; symbol is a deterministic tie-break, not a preference."""
+    executable = 1.0 if decision.action == "ENTER_LONG" else 0.0
+    confluence = float(decision.confluence.confidence) if decision.confluence is not None else -1.0
+    scanner = float(decision.scan.score) if decision.scan is not None else -1.0
+    return (-executable, -confluence, -scanner, decision.symbol.upper())
+
+
+def _fair_processing_order(
+    session: PaperSession,
+    closed_markets: list[MarketData],
+    *,
+    agent_config: AgentConfig | None,
+    risk_config: RiskConfig | None,
+    execution_config: ExecutionConfig | None,
+) -> list[MarketData]:
+    active: list[MarketData] = []
+    fresh: list[tuple[tuple[float, float, float, str], MarketData]] = []
+    for market in closed_markets:
+        symbol = market.symbol.upper()
+        if _has_active_lifecycle(session, symbol):
+            active.append(market)
+            continue
+        decision = _pre_analyze_fresh(
+            session,
+            market,
+            agent_config=agent_config,
+            risk_config=risk_config,
+            execution_config=execution_config,
+        )
+        fresh.append((_candidate_rank(decision), market))
+    fresh.sort(key=lambda item: item[0])
+    return active + [market for _, market in fresh]
+
+
 def run_paper_cycle(
     state: PaperRunnerState,
     session: PaperSession,
@@ -147,7 +226,9 @@ def run_paper_cycle(
     processed = 0
     skipped = 0
     seen: set[str] = set()
+    valid_closed: list[MarketData] = []
 
+    # Validation/closed-candle construction is intentionally input-order neutral.
     for market in markets:
         symbol = market.symbol.upper()
         symbol_errors: list[str] = []
@@ -155,6 +236,7 @@ def run_paper_cycle(
             symbol_errors.append("DUPLICATE_SYMBOL_IN_CYCLE")
         seen.add(symbol)
 
+        closed = None
         if not symbol_errors:
             closed = build_closed_snapshot(market, decision_time=decision_time, reference_timeframe=cfg.reference_timeframe)
             close_time = _reference_close_time(closed, cfg.reference_timeframe)
@@ -168,9 +250,25 @@ def run_paper_cycle(
             results.append(RunnerSymbolResult(symbol, False, None, symbol_errors))
             state.errors.extend(f"{symbol}:{error}" for error in symbol_errors)
             if not cfg.continue_on_symbol_error:
-                break
+                state.last_cycle_time = decision_time
+                state.cycles += 1
+                return RunnerCycleResult(decision_time, processed, skipped, results, errors)
             continue
+        assert closed is not None
+        valid_closed.append(closed)
 
+    processing_order = valid_closed
+    if cfg.fair_same_cycle_allocation and len(valid_closed) > 1:
+        processing_order = _fair_processing_order(
+            session,
+            valid_closed,
+            agent_config=agent_config,
+            risk_config=risk_config,
+            execution_config=execution_config,
+        )
+
+    for closed in processing_order:
+        symbol = closed.symbol.upper()
         step = process_session_snapshot(
             session,
             closed,
@@ -188,7 +286,6 @@ def run_paper_cycle(
             if not cfg.continue_on_symbol_error:
                 break
             continue
-
         processed += 1
         results.append(RunnerSymbolResult(symbol, True, step, []))
 
@@ -199,4 +296,4 @@ def run_paper_cycle(
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Closed-candle paper runner ready; external data adapter required.")
+    print("Closed-candle paper runner ready; fair same-cycle allocation enabled.")
