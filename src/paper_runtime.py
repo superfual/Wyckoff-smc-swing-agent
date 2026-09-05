@@ -3,9 +3,7 @@ Paper Runtime / Market Data Provider Boundary
 Wyckoff + SMC Spot Swing Agent
 
 Coordinates an external normalized market-data provider with the closed-candle
-paper runner and versioned checkpoint persistence. The runtime is intentionally
-provider-agnostic: Binance Agent OS / MCP integration belongs in an adapter that
-implements MarketDataProvider.
+paper runner, persistent portfolio guards, and versioned checkpoint persistence.
 
 This module performs no exchange authentication and sends no orders.
 """
@@ -23,6 +21,7 @@ try:
     from .paper_session import PaperSession, PaperSessionConfig, create_paper_session
     from .paper_trading import PaperTradingConfig
     from .persistence import load_checkpoint, save_checkpoint
+    from .portfolio_safety import PortfolioSafetyConfig
     from .risk import RiskConfig
     from .scanner import WatchlistSymbol, load_watchlist
 except ImportError:
@@ -33,13 +32,12 @@ except ImportError:
     from paper_session import PaperSession, PaperSessionConfig, create_paper_session
     from paper_trading import PaperTradingConfig
     from persistence import load_checkpoint, save_checkpoint
+    from portfolio_safety import PortfolioSafetyConfig
     from risk import RiskConfig
     from scanner import WatchlistSymbol, load_watchlist
 
 
 class MarketDataProvider(Protocol):
-    """Adapter contract: return normalized snapshots for requested symbols."""
-
     def fetch_markets(self, symbols: Sequence[str], *, decision_time: int) -> list[MarketData]:
         ...
 
@@ -102,7 +100,6 @@ def create_paper_runtime(
     runtime_config: PaperRuntimeConfig | None = None,
     session_config: PaperSessionConfig | None = None,
 ) -> PaperRuntime:
-    """Create a fresh runtime or recover the latest valid checkpoint."""
     cfg = runtime_config or PaperRuntimeConfig()
     runtime_symbols = _normalize_symbols(symbols if symbols is not None else load_watchlist())
 
@@ -110,32 +107,18 @@ def create_paper_runtime(
         recovery = load_checkpoint(cfg.checkpoint_path)
         if recovery.recovered:
             assert recovery.session is not None and recovery.runner_state is not None
-            return PaperRuntime(
-                session=recovery.session,
-                runner_state=recovery.runner_state,
-                symbols=runtime_symbols,
-                checkpoint_path=cfg.checkpoint_path,
-                recovered=True,
-                errors=[],
-            )
-        # Missing checkpoint is a normal first-start condition. Other recovery
-        # failures are fail-closed because silently resetting could duplicate risk.
+            return PaperRuntime(recovery.session, recovery.runner_state, runtime_symbols, cfg.checkpoint_path, True, [])
         if recovery.errors != ["CHECKPOINT_NOT_FOUND"]:
             return PaperRuntime(
-                session=create_paper_session(session_config),
-                runner_state=PaperRunnerState(),
-                symbols=runtime_symbols,
-                checkpoint_path=cfg.checkpoint_path,
-                recovered=False,
-                errors=[f"RECOVERY_FAILED:{error}" for error in recovery.errors],
+                create_paper_session(session_config),
+                PaperRunnerState(),
+                runtime_symbols,
+                cfg.checkpoint_path,
+                False,
+                [f"RECOVERY_FAILED:{error}" for error in recovery.errors],
             )
 
-    return PaperRuntime(
-        session=create_paper_session(session_config),
-        runner_state=PaperRunnerState(),
-        symbols=runtime_symbols,
-        checkpoint_path=cfg.checkpoint_path,
-    )
+    return PaperRuntime(create_paper_session(session_config), PaperRunnerState(), runtime_symbols, cfg.checkpoint_path)
 
 
 def run_runtime_cycle(
@@ -149,8 +132,8 @@ def run_runtime_cycle(
     agent_config: AgentConfig | None = None,
     risk_config: RiskConfig | None = None,
     execution_config: ExecutionConfig | None = None,
+    portfolio_safety_config: PortfolioSafetyConfig | None = None,
 ) -> RuntimeCycleResult:
-    """Fetch one normalized batch, run one paper cycle, then checkpoint it."""
     cfg = runtime_config or PaperRuntimeConfig(checkpoint_path=runtime.checkpoint_path)
     errors: list[str] = []
 
@@ -162,7 +145,7 @@ def run_runtime_cycle(
 
     try:
         markets = provider.fetch_markets(runtime.symbols, decision_time=decision_time)
-    except Exception as exc:  # Adapter failures must not mutate runner/session state.
+    except Exception as exc:
         error = f"MARKET_DATA_PROVIDER_ERROR:{type(exc).__name__}"
         runtime.errors.append(error)
         return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, [error])
@@ -194,18 +177,13 @@ def run_runtime_cycle(
         agent_config=agent_config,
         risk_config=risk_config,
         execution_config=execution_config,
+        portfolio_safety_config=portfolio_safety_config,
     )
 
     checkpoint_saved = False
     if cycle.errors:
         errors.extend(cycle.errors)
-    # Persist only a cycle that the runner actually consumed. Pre-cycle rejects
-    # (for example NON_MONOTONIC_CYCLE_TIME) must not rewrite the checkpoint.
-    if (
-        cfg.checkpoint_after_cycle
-        and not cycle.errors
-        and runtime.runner_state.last_cycle_time == decision_time
-    ):
+    if cfg.checkpoint_after_cycle and not cycle.errors and runtime.runner_state.last_cycle_time == decision_time:
         try:
             save_checkpoint(runtime.checkpoint_path, runtime.session, runtime.runner_state)
             checkpoint_saved = True
@@ -214,14 +192,7 @@ def run_runtime_cycle(
             runtime.errors.append(error)
             errors.append(error)
 
-    return RuntimeCycleResult(
-        decision_time=decision_time,
-        provider_symbols=provider_symbols,
-        missing_symbols=missing,
-        cycle=cycle,
-        checkpoint_saved=checkpoint_saved,
-        errors=errors,
-    )
+    return RuntimeCycleResult(decision_time, provider_symbols, missing, cycle, checkpoint_saved, errors)
 
 
 if __name__ == "__main__":
