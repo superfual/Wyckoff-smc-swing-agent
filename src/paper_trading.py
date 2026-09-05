@@ -9,12 +9,14 @@ No exchange orders are sent and no future candles are inspected.
 V1 is intentionally Spot-first: only ENTER_LONG can open a virtual position.
 V1.1 books entry fees immediately and marks open positions to the latest closed
 reference price so paper equity reflects unrealized PnL.
+V1.2 accepts explicit portfolio-level entry blockers while continuing management
+of already-open positions.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import Literal, Sequence
 
 try:
     from .execution import ExecutionConfig
@@ -27,7 +29,7 @@ except ImportError:
     from orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from risk import RiskConfig
 
-PaperEventKind = Literal["DECISION", "OPEN", "CLOSE"]
+PaperEventKind = Literal["DECISION", "OPEN", "CLOSE", "BLOCK"]
 PaperExitReason = Literal["STOP", "TARGET"]
 PaperReferenceTimeframe = Literal["1d", "4h", "1h", "15m"]
 
@@ -143,7 +145,6 @@ def _reference_candle(market: MarketData, timeframe: str) -> Candle | None:
 
 
 def _mark_to_market(account: PaperAccount, price: float) -> None:
-    """Update account equity by only the change in unrealized PnL."""
     previous = account.unrealized_pnl
     position = account.open_position
     if position is None:
@@ -160,7 +161,6 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
     position = account.open_position
     assert position is not None
 
-    # Remove the previously marked unrealized component before booking realized PnL.
     account.equity -= account.unrealized_pnl
     account.unrealized_pnl = 0.0
     account.mark_price = None
@@ -170,11 +170,10 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
     exit_fee = position.units * exit_price * cfg.fee_bps_per_side / 10_000
     total_fees = position.entry_fee_quote + exit_fee
     lifecycle_net_pnl = gross_pnl - total_fees
-
-    # Entry fee was already booked at OPEN, so only gross PnL minus exit fee is new now.
     close_realized_delta = gross_pnl - exit_fee
     risk_quote = position.units * (position.entry_price - position.stop_price)
     net_r = lifecycle_net_pnl / risk_quote if risk_quote > 0 else 0.0
+
     trade = PaperTrade(
         symbol=position.symbol,
         direction=position.direction,
@@ -200,6 +199,27 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
     return trade
 
 
+def _apply_entry_blockers(decision: AgentDecision, blockers: Sequence[str]) -> None:
+    """Convert an otherwise executable fresh entry into an explicit portfolio block."""
+    if not blockers or decision.action not in {"ENTER_LONG", "ENTER_SHORT"}:
+        return
+    unique = list(dict.fromkeys(str(item) for item in blockers if str(item)))
+    if not unique:
+        return
+    execution = decision.execution
+    if execution is not None:
+        execution.allowed = False
+        execution.state = "BLOCKED"
+        execution.action = "BLOCKED"
+        execution.position_size_quote = 0.0
+        execution.position_size_units = 0.0
+        execution.blockers.extend(item for item in unique if item not in execution.blockers)
+        execution.interpretation = "Portfolio safety blocks a new entry even though symbol-level analysis passed."
+    decision.action = "BLOCKED"
+    decision.reasons.extend(f"Portfolio safety: {item}." for item in unique)
+    decision.interpretation = "Symbol-level setup passed, but portfolio-level safety blocks new exposure."
+
+
 def process_paper_snapshot(
     account: PaperAccount,
     market: MarketData,
@@ -210,6 +230,7 @@ def process_paper_snapshot(
     agent_config: AgentConfig | None = None,
     risk_config: RiskConfig | None = None,
     execution_config: ExecutionConfig | None = None,
+    entry_blockers: Sequence[str] = (),
 ) -> PaperStepResult:
     """Process exactly one newly closed market snapshot."""
     cfg = config or PaperTradingConfig(initial_equity=account.initial_equity)
@@ -246,6 +267,9 @@ def process_paper_snapshot(
                 account.events.append(event)
                 closed_this_step = True
 
+    if account.open_position is not None:
+        _mark_to_market(account, market.current_price)
+
     cooldown_active = account.cooldown_bars_remaining > 0 or closed_this_step
     if current_portfolio_exposure_pct is None:
         exposure_pct = (account.open_position.position_size_quote / account.equity * 100) if account.open_position and account.equity > 0 else 0.0
@@ -262,6 +286,14 @@ def process_paper_snapshot(
         risk_config=risk_config,
         execution_config=execution_config,
     )
+    pre_guard_action = decision.action
+    _apply_entry_blockers(decision, entry_blockers)
+    if decision.action == "BLOCKED" and pre_guard_action in {"ENTER_LONG", "ENTER_SHORT"}:
+        block_note = ", ".join(dict.fromkeys(str(item) for item in entry_blockers if str(item)))
+        event = PaperEvent(timestamp, "BLOCK", "BLOCKED", f"Portfolio safety blocked new exposure: {block_note}.")
+        events.append(event)
+        account.events.append(event)
+
     decision_event = PaperEvent(timestamp, "DECISION", decision.action, decision.interpretation)
     events.append(decision_event)
     account.events.append(decision_event)
@@ -273,6 +305,8 @@ def process_paper_snapshot(
             size_quote = min(execution.position_size_quote, account.equity)
             units = size_quote / entry
             entry_fee = size_quote * cfg.fee_bps_per_side / 10_000
+            account.realized_pnl -= entry_fee
+            account.equity -= entry_fee
             account.open_position = PaperPosition(
                 symbol=market.symbol,
                 direction="LONG",
@@ -284,15 +318,10 @@ def process_paper_snapshot(
                 units=units,
                 entry_fee_quote=entry_fee,
             )
-            # Book entry fee immediately instead of delaying it until CLOSE.
-            account.realized_pnl -= entry_fee
-            account.equity -= entry_fee
+            _mark_to_market(account, market.current_price)
             event = PaperEvent(timestamp, "OPEN", "ENTER_LONG", f"Virtual long opened at {entry:.8f} with {size_quote:.2f} quote exposure; entry fee {entry_fee:.2f} booked.")
             events.append(event)
             account.events.append(event)
-
-    # Mark any surviving/newly opened position using the current closed reference price.
-    _mark_to_market(account, market.current_price)
 
     if account.cooldown_bars_remaining > 0 and not closed_this_step:
         account.cooldown_bars_remaining -= 1
