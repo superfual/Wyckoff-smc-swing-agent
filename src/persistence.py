@@ -6,9 +6,7 @@ Serializes PaperSession + PaperRunnerState into a versioned JSON checkpoint and
 restores them after restart. Writes use an atomic temp-file replace so a process
 interruption is less likely to leave a partially written checkpoint.
 
-V1 checkpoints are migrated additively for Paper Equity V1.1: legacy open
-positions had not yet booked entry fees and had no unrealized mark state.
-
+Legacy checkpoints are migrated additively for MTM equity and portfolio safety.
 This module stores no exchange credentials and sends no orders.
 """
 
@@ -24,10 +22,12 @@ try:
     from .paper_runner import PaperRunnerState
     from .paper_session import JournalEntry, PaperSession, SessionEquityPoint
     from .paper_trading import PaperAccount, PaperEvent, PaperPosition, PaperTrade
+    from .portfolio_safety import PortfolioSafetyState
 except ImportError:
     from paper_runner import PaperRunnerState
     from paper_session import JournalEntry, PaperSession, SessionEquityPoint
     from paper_trading import PaperAccount, PaperEvent, PaperPosition, PaperTrade
+    from portfolio_safety import PortfolioSafetyState
 
 CHECKPOINT_SCHEMA = "wyckoff-smc-paper-runner"
 CHECKPOINT_VERSION = 1
@@ -59,7 +59,6 @@ def checkpoint_payload(session: PaperSession, runner_state: PaperRunnerState) ->
 
 
 def save_checkpoint(path: str | Path, session: PaperSession, runner_state: PaperRunnerState) -> Path:
-    """Atomically persist one complete paper-runner checkpoint."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name + ".tmp")
@@ -115,6 +114,16 @@ def _account(raw: dict[str, Any]) -> PaperAccount:
     )
 
 
+def _portfolio_safety(raw: Any) -> PortfolioSafetyState:
+    if not isinstance(raw, dict):
+        return PortfolioSafetyState()
+    return PortfolioSafetyState(
+        kill_switch_active=bool(raw.get("kill_switch_active", False)),
+        current_day_index=raw.get("current_day_index"),
+        day_start_equity=raw.get("day_start_equity"),
+    )
+
+
 def _session(raw: dict[str, Any]) -> PaperSession:
     raw_accounts = raw.get("accounts", {})
     accounts = {symbol: _account(account) for symbol, account in raw_accounts.items()}
@@ -133,6 +142,7 @@ def _session(raw: dict[str, Any]) -> PaperSession:
         decisions=raw.get("decisions", 0),
         errors=list(raw.get("errors", [])),
         unrealized_pnl=unrealized,
+        portfolio_safety=_portfolio_safety(raw.get("portfolio_safety")),
     )
     for account in session.accounts.values():
         account.equity = session.equity
@@ -156,6 +166,12 @@ def _validate_recovered(session: PaperSession, runner_state: PaperRunnerState) -
     if runner_state.last_cycle_time is not None and runner_state.last_cycle_time < 0:
         errors.append("INVALID_CHECKPOINT_CYCLE_TIME")
 
+    safety = session.portfolio_safety
+    if safety.current_day_index is not None and safety.current_day_index < 0:
+        errors.append("INVALID_PORTFOLIO_SAFETY_DAY")
+    if safety.day_start_equity is not None and safety.day_start_equity <= 0:
+        errors.append("INVALID_PORTFOLIO_SAFETY_BASELINE")
+
     for symbol, account in session.accounts.items():
         if account.initial_equity <= 0 or account.equity <= 0:
             errors.append(f"INVALID_ACCOUNT_EQUITY:{symbol}")
@@ -170,7 +186,6 @@ def _validate_recovered(session: PaperSession, runner_state: PaperRunnerState) -
 
 
 def load_checkpoint(path: str | Path) -> RecoveryResult:
-    """Restore a checkpoint only when schema, version and state invariants are valid."""
     target = Path(path)
     if not target.exists():
         return RecoveryResult(None, None, ["CHECKPOINT_NOT_FOUND"])
@@ -187,7 +202,6 @@ def load_checkpoint(path: str | Path) -> RecoveryResult:
             return RecoveryResult(None, None, ["CHECKPOINT_SCHEMA_MISMATCH"])
         if metadata.get("version") != CHECKPOINT_VERSION:
             return RecoveryResult(None, None, ["CHECKPOINT_VERSION_UNSUPPORTED"])
-
         session = _session(payload["paper_session"])
         runner_state = _runner_state(payload["runner_state"])
     except (KeyError, TypeError, ValueError):
