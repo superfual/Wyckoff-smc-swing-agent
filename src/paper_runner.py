@@ -3,9 +3,8 @@ Closed-Candle Paper Trading Runner
 Wyckoff + SMC Spot Swing Agent
 
 Consumes normalized MarketData snapshots supplied by an external market-data
-adapter (for example Binance Agent OS / MCP), strips any candles that are not
-closed at the supplied decision time, and feeds the resulting snapshots into
-the shared PaperSession.
+adapter, strips candles that are not closed at decision time, and feeds the
+result into the shared PaperSession with portfolio-level entry safety guards.
 
 This module performs no network requests, stores no credentials and sends no
 exchange orders.
@@ -22,6 +21,7 @@ try:
     from .orchestrator import AgentConfig
     from .paper_session import PaperSession, process_session_snapshot
     from .paper_trading import PaperStepResult, PaperTradingConfig
+    from .portfolio_safety import PortfolioSafetyConfig
     from .risk import RiskConfig
 except ImportError:
     from execution import ExecutionConfig
@@ -29,23 +29,13 @@ except ImportError:
     from orchestrator import AgentConfig
     from paper_session import PaperSession, process_session_snapshot
     from paper_trading import PaperStepResult, PaperTradingConfig
+    from portfolio_safety import PortfolioSafetyConfig
     from risk import RiskConfig
 
 RunnerTimeframe = Literal["1d", "4h", "1h", "15m"]
 
-_TIMEFRAME_MS = {
-    "1d": 86_400_000,
-    "4h": 14_400_000,
-    "1h": 3_600_000,
-    "15m": 900_000,
-}
-
-_TIMEFRAME_FIELD = {
-    "1d": "daily",
-    "4h": "four_hour",
-    "1h": "one_hour",
-    "15m": "fifteen_minute",
-}
+_TIMEFRAME_MS = {"1d": 86_400_000, "4h": 14_400_000, "1h": 3_600_000, "15m": 900_000}
+_TIMEFRAME_FIELD = {"1d": "daily", "4h": "four_hour", "1h": "one_hour", "15m": "fifteen_minute"}
 
 
 @dataclass(frozen=True)
@@ -95,7 +85,6 @@ def _closed_candles(candles: list[Candle], timeframe: str, decision_time: int) -
 
 
 def build_closed_snapshot(market: MarketData, *, decision_time: int, reference_timeframe: RunnerTimeframe = "1h") -> MarketData:
-    """Remove partially formed/future candles and derive price from the last closed reference candle."""
     if reference_timeframe not in _TIMEFRAME_FIELD:
         raise ValueError(f"Unsupported runner timeframe: {reference_timeframe}")
     if decision_time < 0:
@@ -105,24 +94,10 @@ def build_closed_snapshot(market: MarketData, *, decision_time: int, reference_t
     four_hour = _closed_candles(market.four_hour, "4h", decision_time)
     one_hour = _closed_candles(market.one_hour, "1h", decision_time)
     fifteen_minute = _closed_candles(market.fifteen_minute, "15m", decision_time)
-
-    by_field = {
-        "daily": daily,
-        "four_hour": four_hour,
-        "one_hour": one_hour,
-        "fifteen_minute": fifteen_minute,
-    }
+    by_field = {"daily": daily, "four_hour": four_hour, "one_hour": one_hour, "fifteen_minute": fifteen_minute}
     reference = by_field[_TIMEFRAME_FIELD[reference_timeframe]]
     current_price = reference[-1].close if reference else None
-
-    return MarketData(
-        symbol=market.symbol,
-        current_price=current_price,
-        daily=daily,
-        four_hour=four_hour,
-        one_hour=one_hour,
-        fifteen_minute=fifteen_minute,
-    )
+    return MarketData(market.symbol, current_price, daily, four_hour, one_hour, fifteen_minute)
 
 
 def _reference_close_time(market: MarketData, timeframe: str) -> int | None:
@@ -144,8 +119,8 @@ def run_paper_cycle(
     agent_config: AgentConfig | None = None,
     risk_config: RiskConfig | None = None,
     execution_config: ExecutionConfig | None = None,
+    portfolio_safety_config: PortfolioSafetyConfig | None = None,
 ) -> RunnerCycleResult:
-    """Process one decision-time cycle across a batch of normalized market snapshots."""
     cfg = config or PaperRunnerConfig()
     errors: list[str] = []
 
@@ -159,8 +134,6 @@ def run_paper_cycle(
         state.errors.extend(errors)
         return RunnerCycleResult(decision_time, 0, len(markets), [], errors)
 
-    # Keep paper outcome timeframe aligned with runner semantics unless caller explicitly
-    # supplies another valid paper config.
     if paper_config is None:
         paper_cfg = PaperTradingConfig(reference_timeframe=cfg.reference_timeframe)
     else:
@@ -173,8 +146,8 @@ def run_paper_cycle(
     results: list[RunnerSymbolResult] = []
     processed = 0
     skipped = 0
-
     seen: set[str] = set()
+
     for market in markets:
         symbol = market.symbol.upper()
         symbol_errors: list[str] = []
@@ -206,6 +179,7 @@ def run_paper_cycle(
             agent_config=agent_config,
             risk_config=risk_config,
             execution_config=execution_config,
+            portfolio_safety_config=portfolio_safety_config,
         )
         if step.errors:
             skipped += 1
@@ -218,8 +192,6 @@ def run_paper_cycle(
         processed += 1
         results.append(RunnerSymbolResult(symbol, True, step, []))
 
-    # A cycle is considered consumed once its batch has been evaluated. This prevents
-    # retries from duplicating decisions/trades; failed symbols can be inspected via errors.
     state.last_cycle_time = decision_time
     state.cycles += 1
     return RunnerCycleResult(decision_time, processed, skipped, results, errors)
