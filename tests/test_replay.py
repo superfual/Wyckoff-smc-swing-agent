@@ -1,5 +1,7 @@
 """Unit tests for the bar-by-bar replay engine."""
 
+from copy import deepcopy
+
 from src.market_data import Candle, MarketData
 from src.replay import ReplayConfig, run_replay, slice_market_at_decision_time
 
@@ -95,3 +97,73 @@ def test_replay_rejects_invalid_account_equity() -> None:
     result = run_replay(make_market(), account_equity=0)
     assert result.steps == []
     assert "INVALID_ACCOUNT_EQUITY" in result.errors
+
+
+def test_as_of_time_excludes_reference_candle_that_has_not_closed() -> None:
+    market = make_market()
+    hour = 3_600_000
+    # The candle opening at hour 11 closes at hour 12, so it is unavailable
+    # when the historical decision cutoff is hour 11.
+    result = run_replay(
+        market,
+        account_equity=10_000,
+        config=ReplayConfig(reference_timeframe="1h", warmup_bars=5, as_of_time=11 * hour),
+    )
+
+    assert result.errors == []
+    assert result.no_lookahead_verified is True
+    assert result.excluded_reference_bars == 1
+    assert result.last_decision_time == 11 * hour
+    assert all(step.decision_time <= result.as_of_time for step in result.steps)
+
+
+def test_every_replay_step_carries_auditable_closed_candle_counts() -> None:
+    result = run_replay(
+        make_market(),
+        account_equity=10_000,
+        config=ReplayConfig(reference_timeframe="1h", warmup_bars=5),
+    )
+
+    assert result.no_lookahead_verified is True
+    assert result.audit_errors == []
+    for step in result.steps:
+        assert set(step.snapshot_candle_counts) == {"1d", "4h", "1h", "15m"}
+        assert step.snapshot_candle_counts["1h"] == step.bar_index + 1
+        assert all(
+            close_time is None or close_time <= step.decision_time
+            for close_time in step.latest_closed_times.values()
+        )
+
+
+def test_future_data_append_cannot_change_past_replay_decisions() -> None:
+    market = make_market()
+    augmented = deepcopy(market)
+    hour = 3_600_000
+    cutoff = 12 * hour
+    augmented.one_hour.append(candle(12 * hour, 9_999.0))
+    augmented.fifteen_minute.append(candle(48 * 900_000, 9_999.0))
+    augmented.four_hour.append(candle(8 * 14_400_000, 9_999.0))
+    augmented.daily.append(candle(2 * 86_400_000, 9_999.0))
+
+    cfg = ReplayConfig(reference_timeframe="1h", warmup_bars=5, as_of_time=cutoff)
+    baseline = run_replay(market, account_equity=10_000, config=cfg)
+    with_future = run_replay(augmented, account_equity=10_000, config=cfg)
+
+    assert baseline.errors == [] and with_future.errors == []
+    assert [step.to_dict() for step in with_future.steps] == [step.to_dict() for step in baseline.steps]
+    assert with_future.excluded_reference_bars == baseline.excluded_reference_bars + 1
+
+
+def test_replay_fails_closed_on_duplicate_candle_timestamp() -> None:
+    market = make_market()
+    market.one_hour[5].timestamp = market.one_hour[4].timestamp
+
+    result = run_replay(
+        market,
+        account_equity=10_000,
+        config=ReplayConfig(reference_timeframe="1h", warmup_bars=5),
+    )
+
+    assert result.steps == []
+    assert "NON_MONOTONIC_CANDLES:1h" in result.errors
+    assert result.no_lookahead_verified is False

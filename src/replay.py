@@ -49,6 +49,10 @@ _TIMEFRAME_FIELD: dict[str, str] = {
 class ReplayConfig:
     reference_timeframe: ReplayTimeframe = "1h"
     warmup_bars: int = 40
+    # Optional historical cutoff. Reference candles closing after this instant
+    # are excluded even when the caller passes a raw Binance snapshot that also
+    # contains the currently forming candle.
+    as_of_time: int | None = None
 
 
 @dataclass
@@ -59,6 +63,8 @@ class ReplayStep:
     current_price: float
     action: str
     decision: AgentDecision
+    snapshot_candle_counts: dict[str, int] | None = None
+    latest_closed_times: dict[str, int | None] | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -73,6 +79,10 @@ class ReplayResult:
     first_decision_time: int | None
     last_decision_time: int | None
     errors: list[str]
+    as_of_time: int | None = None
+    excluded_reference_bars: int = 0
+    no_lookahead_verified: bool = False
+    audit_errors: list[str] | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -87,6 +97,31 @@ def _timeframe_candles(market: MarketData, timeframe: str) -> list[Candle]:
 def _closed_by(candles: list[Candle], timeframe: str, decision_time: int) -> list[Candle]:
     duration = _TIMEFRAME_MS[timeframe]
     return [candle for candle in candles if candle.timestamp + duration <= decision_time]
+
+
+def _chronology_errors(market: MarketData) -> list[str]:
+    errors: list[str] = []
+    for timeframe, field in _TIMEFRAME_FIELD.items():
+        timestamps = [candle.timestamp for candle in getattr(market, field)]
+        if any(timestamp < 0 for timestamp in timestamps):
+            errors.append(f"NEGATIVE_CANDLE_TIMESTAMP:{timeframe}")
+        if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
+            errors.append(f"NON_MONOTONIC_CANDLES:{timeframe}")
+    return errors
+
+
+def _snapshot_audit(snapshot: MarketData, decision_time: int) -> tuple[dict[str, int], dict[str, int | None], list[str]]:
+    counts: dict[str, int] = {}
+    latest_closes: dict[str, int | None] = {}
+    violations: list[str] = []
+    for timeframe, field in _TIMEFRAME_FIELD.items():
+        candles = getattr(snapshot, field)
+        duration = _TIMEFRAME_MS[timeframe]
+        counts[timeframe] = len(candles)
+        latest_closes[timeframe] = candles[-1].timestamp + duration if candles else None
+        if any(candle.timestamp + duration > decision_time for candle in candles):
+            violations.append(f"FUTURE_CANDLE_LEAK:{timeframe}:{decision_time}")
+    return counts, latest_closes, violations
 
 
 def slice_market_at_decision_time(
@@ -143,14 +178,26 @@ def run_replay(
         errors.append("INVALID_REFERENCE_TIMEFRAME")
     if cfg.warmup_bars < 1:
         errors.append("INVALID_WARMUP_BARS")
+    if cfg.as_of_time is not None and cfg.as_of_time < 0:
+        errors.append("INVALID_AS_OF_TIME")
     if account_equity <= 0:
         errors.append("INVALID_ACCOUNT_EQUITY")
+    errors.extend(_chronology_errors(market))
 
     if errors:
-        return ReplayResult(market.symbol, cfg.reference_timeframe, [], {}, None, None, errors)
+        return ReplayResult(
+            market.symbol, cfg.reference_timeframe, [], {}, None, None, errors,
+            as_of_time=cfg.as_of_time, audit_errors=list(errors),
+        )
 
     reference = _timeframe_candles(market, cfg.reference_timeframe)
-    if len(reference) <= cfg.warmup_bars:
+    duration = _TIMEFRAME_MS[cfg.reference_timeframe]
+    eligible = [
+        (index, candle) for index, candle in enumerate(reference)
+        if cfg.as_of_time is None or candle.timestamp + duration <= cfg.as_of_time
+    ]
+    excluded_reference_bars = len(reference) - len(eligible)
+    if len(eligible) < cfg.warmup_bars:
         return ReplayResult(
             market.symbol,
             cfg.reference_timeframe,
@@ -159,20 +206,27 @@ def run_replay(
             None,
             None,
             ["INSUFFICIENT_REPLAY_BARS"],
+            as_of_time=cfg.as_of_time,
+            excluded_reference_bars=excluded_reference_bars,
+            audit_errors=["INSUFFICIENT_REPLAY_BARS"],
         )
 
-    duration = _TIMEFRAME_MS[cfg.reference_timeframe]
     steps: list[ReplayStep] = []
     action_counts: dict[str, int] = {}
+    audit_errors: list[str] = []
 
-    for bar_index in range(cfg.warmup_bars - 1, len(reference)):
-        bar = reference[bar_index]
+    for eligible_index in range(cfg.warmup_bars - 1, len(eligible)):
+        bar_index, bar = eligible[eligible_index]
         decision_time = bar.timestamp + duration
         snapshot = slice_market_at_decision_time(
             market,
             decision_time,
             reference_timeframe=cfg.reference_timeframe,
         )
+        counts, latest_closes, violations = _snapshot_audit(snapshot, decision_time)
+        audit_errors.extend(violations)
+        if snapshot.current_price != bar.close:
+            audit_errors.append(f"REFERENCE_PRICE_MISMATCH:{bar_index}")
         decision = analyze_symbol(
             snapshot,
             account_equity=account_equity,
@@ -189,6 +243,8 @@ def run_replay(
             current_price=bar.close,
             action=decision.action,
             decision=decision,
+            snapshot_candle_counts=counts,
+            latest_closed_times=latest_closes,
         ))
 
     return ReplayResult(
@@ -198,7 +254,11 @@ def run_replay(
         action_counts=action_counts,
         first_decision_time=steps[0].decision_time if steps else None,
         last_decision_time=steps[-1].decision_time if steps else None,
-        errors=[],
+        errors=list(dict.fromkeys(audit_errors)),
+        as_of_time=cfg.as_of_time,
+        excluded_reference_bars=excluded_reference_bars,
+        no_lookahead_verified=not audit_errors,
+        audit_errors=list(dict.fromkeys(audit_errors)),
     )
 
 

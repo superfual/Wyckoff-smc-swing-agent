@@ -920,6 +920,24 @@ to demonstrate on-demand deep analysis.
 
 ---
 
+## Historical replay and no-lookahead contract
+
+`src/replay.py` replays one closed reference candle at a time through the full
+agent orchestrator. `ReplayConfig.as_of_time` may be set to the exact historical
+decision cutoff; any reference candle whose close is later than that cutoff is
+excluded, including a currently forming Binance candle.
+
+Every replay step records the candle count and latest known close time for all
+four timeframes. A trustworthy result reports `no_lookahead_verified=true` and
+an empty `audit_errors` list. Replay also fails closed on duplicate, descending,
+or negative candle timestamps. Tests verify prefix invariance: appending future
+data cannot change decisions made at or before the configured cutoff.
+
+This is research and paper-validation infrastructure only. It does not submit
+exchange orders.
+
+---
+
 ## 🗺️ Development Roadmap
 
 ### V1 — Curated Watchlist Spot Swing Agent
