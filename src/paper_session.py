@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from math import inf
+from typing import Sequence
 
 try:
     from .execution import ExecutionConfig
@@ -138,10 +139,7 @@ def _open_position_count(session: PaperSession) -> int:
 
 
 def _open_symbols(session: PaperSession) -> tuple[str, ...]:
-    return tuple(
-        symbol for symbol, account in session.accounts.items()
-        if account.open_position is not None
-    )
+    return tuple(symbol for symbol, account in session.accounts.items() if account.open_position is not None)
 
 
 def _exposure_pct(session: PaperSession) -> float:
@@ -176,6 +174,7 @@ def process_session_snapshot(
     risk_config: RiskConfig | None = None,
     execution_config: ExecutionConfig | None = None,
     portfolio_safety_config: PortfolioSafetyConfig | None = None,
+    allocation_blockers: Sequence[str] = (),
 ) -> PaperStepResult:
     """Process one symbol snapshot under shared equity/exposure/safety state."""
 
@@ -200,7 +199,7 @@ def process_session_snapshot(
             open_symbols=_open_symbols(session),
             config=portfolio_safety_config,
         )
-        entry_blockers = safety.blockers
+        entry_blockers = tuple(dict.fromkeys((*safety.blockers, *(str(item) for item in allocation_blockers if str(item)))))
     except ValueError as exc:
         error = f"INVALID_PORTFOLIO_SAFETY:{type(exc).__name__}"
         session.errors.append(f"{market.symbol}:{error}")
@@ -233,7 +232,7 @@ def process_session_snapshot(
         session.action_counts[result.decision.action] = session.action_counts.get(result.decision.action, 0) + 1
 
     exposure_after = _exposure_pct(session)
-    note = "; ".join(event.note for event in result.events if event.kind in {"OPEN", "CLOSE", "BLOCK"})
+    note = "; ".join(event.note for event in result.events if event.kind in {"OPEN", "CLOSE", "BLOCK", "CANCEL"})
     session.journal.append(JournalEntry(
         timestamp=timestamp,
         symbol=market.symbol,
