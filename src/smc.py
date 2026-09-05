@@ -488,23 +488,34 @@ def analyze_smc(
         )
 
     candles = _timeframe_candles(market, timeframe)
-    swings = _compress_same_kind_swings(
-        detect_swings(candles, left=swing_left, right=swing_right)
-    )
-    swing_state = classify_swing_structure(swings)
+
+    # Preserve every confirmed pivot for liquidity analysis. Equal highs/lows
+    # are evidence precisely because multiple nearby pivots exist. Structure
+    # analysis, by contrast, benefits from compressing consecutive same-kind
+    # pivots to the more extreme one so BOS/CHoCH does not become noisy.
+    raw_swings = detect_swings(candles, left=swing_left, right=swing_right)
+    structure_swings = _compress_same_kind_swings(raw_swings)
+
+    swing_state = classify_swing_structure(structure_swings)
     events = detect_structure_events(
         candles,
-        swings,
+        structure_swings,
         use_close_confirmation=use_close_confirmation,
     )
     liquidity_pools = detect_liquidity_pools(
-        swings,
+        raw_swings,
         tolerance_pct=liquidity_tolerance_pct,
     )
     liquidity_sweeps = detect_liquidity_sweeps(candles, liquidity_pools)
 
-    latest_high = next((s for s in reversed(swings) if s.kind == "HIGH"), None)
-    latest_low = next((s for s in reversed(swings) if s.kind == "LOW"), None)
+    latest_high = next(
+        (s for s in reversed(structure_swings) if s.kind == "HIGH"),
+        None,
+    )
+    latest_low = next(
+        (s for s in reversed(structure_swings) if s.kind == "LOW"),
+        None,
+    )
     bias, trend_state = _analysis_bias(events, swing_state)
 
     if liquidity_sweeps:
@@ -543,7 +554,7 @@ def analyze_smc(
         timeframe=timeframe,
         bias=bias,
         trend_state=trend_state,
-        swings=swings,
+        swings=structure_swings,
         events=events,
         liquidity_pools=liquidity_pools,
         liquidity_sweeps=liquidity_sweeps,
