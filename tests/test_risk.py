@@ -41,7 +41,13 @@ def ready_short() -> TradeThesis:
 
 
 def test_ready_long_can_pass_risk_controls() -> None:
-    result = evaluate_risk(ready_long(), account_equity=10_000, current_portfolio_exposure_pct=20)
+    cfg = RiskConfig(risk_per_trade_pct=0.5)
+    result = evaluate_risk(
+        ready_long(),
+        account_equity=10_000,
+        current_portfolio_exposure_pct=20,
+        config=cfg,
+    )
     assert result.decision == "ALLOW"
     assert result.reward_risk > 2
     assert result.position_size_quote > 0
