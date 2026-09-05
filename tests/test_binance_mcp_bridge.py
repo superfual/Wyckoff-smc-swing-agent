@@ -84,7 +84,7 @@ def test_bridge_wraps_transport_error_without_leaking_message():
         bridge.get_klines("BTCUSDT", "1h", limit=10, end_time=2_000)
         assert False, "expected BinanceMCPBridgeError"
     except BinanceMCPBridgeError as exc:
-        assert exc.code == "MCP_TOOL_INVOCATION_FAILED"
+        assert exc.code == "MCP_TOOL_TRANSIENT_FAILURE"
         assert exc.detail == "ConnectionError"
         assert "secret transport detail" not in str(exc)
 
@@ -123,3 +123,23 @@ def test_invalid_request_is_rejected_before_transport_call():
     except BinanceMCPBridgeError as exc:
         assert exc.code == "INVALID_MCP_SYMBOL"
     assert invoker.calls == []
+
+
+def test_bridge_fetches_and_parses_spot_price_without_order_surface():
+    invoker = FakeInvoker({"symbol": "BTCUSDT", "price": "80123.45"})
+    bridge = BinanceMCPClientBridge(invoker)
+
+    assert bridge.get_price("btcusdt") == 80123.45
+    assert invoker.calls == [("get_price", {"symbol": "BTCUSDT"})]
+    assert not hasattr(bridge, "new_order")
+
+
+def test_bridge_marks_returned_rate_limit_error_as_transient():
+    payload = {"error": "McpServerError: -1003 too much request weight", "error_code": "UNAVAILABLE"}
+    bridge = BinanceMCPClientBridge(FakeInvoker(payload))
+
+    try:
+        bridge.get_price("BTCUSDT")
+        assert False, "expected BinanceMCPBridgeError"
+    except BinanceMCPBridgeError as exc:
+        assert exc.code == "MCP_TOOL_TRANSIENT_FAILURE"

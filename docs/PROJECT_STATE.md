@@ -78,6 +78,7 @@ Historical MarketData
 
 - `src/market_data.py`: Binance kline normalization and `MarketData`
 - `src/binance_mcp_bridge.py`: fail-closed, read-only MCP response bridge
+- `src/binance_watchlist_acquisition.py`: grouped, retry-bounded Spot ticker/kline acquisition
 - `src/binance_adapter.py`: read-only Binance multi-timeframe provider
 - `src/binance_live_paper_validation.py`: live-feed preflight without portfolio mutation
 - `src/watchlist_validation.py`: deterministic 12-symbol feed validation, ranking, and selective deep analysis
@@ -160,6 +161,17 @@ The configured 12-symbol Spot watchlist is:
   - selective deep analysis for `WATCH` and `HIGH_INTEREST`
   - fail-closed Spot-only enforcement
   - deterministic paper-only reporting
+- Rate-limit-aware Binance MCP acquisition implemented with:
+  - aligned shared 1H decision boundary
+  - configurable bounded symbol groups
+  - per-endpoint success caching
+  - retry of transient/rate-limit failures only
+  - bounded exponential backoff via an injectable sleeper
+  - immediate failure for malformed/permanent responses
+  - explicit `INCOMPLETE` result after retry exhaustion
+  - no downstream validation until the entire batch is complete
+  - read-only bridge support for Spot ticker price
+  - no account, wallet, transfer, credential, or order methods
 
 ## Verified BTC checkpoints
 
@@ -264,20 +276,20 @@ Always inspect the current `main` commit and latest CI instead of assuming this 
 
 ## NEXT STEP
 
-### Add a rate-limit-aware Binance MCP acquisition runner
+### Integrate rate-aware acquisition into the live paper host
 
-Build the host-side layer that feeds `validate_watchlist_batch` safely and repeatably:
+Add one safe host entry point that composes the completed layers without
+advancing paper portfolio state prematurely:
 
-1. Load the enabled watchlist without hard-coded symbols.
-2. Capture one aligned 1H decision boundary for the batch.
-3. Fetch symbols in bounded groups instead of one 60-request burst.
-4. Retry only transient/rate-limited read-only calls with bounded backoff.
-5. Never retry malformed, unauthorized, or structurally invalid data as if it were transient.
-6. Preserve successful symbol/timeframe responses when another request needs retry.
-7. Emit an explicit incomplete-batch result if the retry budget is exhausted.
-8. Pass the immutable complete snapshot to `validate_watchlist_batch`.
-9. Add deterministic tests using an injected fake MCP invoker; CI must not depend on live Binance.
-10. Keep all order, account, wallet, transfer, and credential capabilities outside this runner.
+1. Load enabled symbols and priorities from `config/watchlist.json`.
+2. Construct the read-only Binance MCP bridge.
+3. Run grouped acquisition and complete-batch validation.
+4. Return an `INCOMPLETE` or `BLOCKED` report without mutating paper state.
+5. Permit a paper cycle only after acquisition and validation are both `READY`.
+6. Keep current price as observation metadata; decisions must use the latest closed reference candle.
+7. Produce one concise control-room report for demo and operational review.
+8. Add tests proving failed acquisition/preflight cannot change session, positions, cash, or checkpoints.
+9. Keep live network calls outside CI; use injected deterministic fake MCP tools.
 
 Do not expand to autonomous execution. Do not send exchange orders.
 
