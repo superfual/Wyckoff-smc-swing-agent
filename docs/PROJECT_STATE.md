@@ -80,6 +80,7 @@ Historical MarketData
 - `src/binance_mcp_bridge.py`: fail-closed, read-only MCP response bridge
 - `src/binance_adapter.py`: read-only Binance multi-timeframe provider
 - `src/binance_live_paper_validation.py`: live-feed preflight without portfolio mutation
+- `src/watchlist_validation.py`: deterministic 12-symbol feed validation, ranking, and selective deep analysis
 - `src/history_sufficiency.py`: component-specific closed-history requirements
 - `src/paper_readiness.py`: paper-runtime configuration safety
 - `src/modes.py`: trading-mode definitions
@@ -149,6 +150,16 @@ The configured 12-symbol Spot watchlist is:
   - per-step latest-known close-time audit
   - future-prefix invariance regression test
   - `no_lookahead_verified` and `audit_errors`
+- Complete 12-symbol Spot watchlist validation implemented with:
+  - one shared batch decision time
+  - required observed Spot prices
+  - strict symbol completeness and uniqueness
+  - duplicate, descending, stale, and future timestamp rejection
+  - closed-candle and history-sufficiency gates before scanning
+  - deterministic scanner ranking
+  - selective deep analysis for `WATCH` and `HIGH_INTEREST`
+  - fail-closed Spot-only enforcement
+  - deterministic paper-only reporting
 
 ## Verified BTC checkpoints
 
@@ -209,6 +220,36 @@ A full 1H replay of the refreshed BTC snapshot, bounded by an exact as-of time, 
 
 At the final 1H decision boundary, replay could see only the 15M candles that had closed by that exact hour. Later-closed 15M candles present in the downloaded snapshot were excluded. Tests also prove that appending future candles cannot change earlier decisions.
 
+## Verified 12-coin watchlist checkpoint
+
+Decision time: `2026-09-05 20:00:00 UTC`
+
+- Source: Binance MCP Spot ticker and kline endpoints only
+- Symbols: all 12 enabled entries from `config/watchlist.json`
+- Raw history per symbol: 120/240/300/300 (`1D/4H/1H/15M`)
+- Closed history per symbol: 119/239/299/299
+- Open candles removed per symbol: one on every timeframe
+- Feed/history result: 12/12 valid
+- Batch result: `READY`, `paper_only = true`, no feed blockers
+- Real exchange orders: none
+
+Scanner ranking at this checkpoint:
+
+1. ETHUSDT — 83 `HIGH_INTEREST` → `AVOID_BUY` (bearish Spot thesis)
+2. SOLUSDT — 83 `HIGH_INTEREST` → `BLOCKED`
+3. XRPUSDT — 83 `HIGH_INTEREST` → `BLOCKED`
+4. LINKUSDT — 80 `HIGH_INTEREST` → `BLOCKED`
+5. AVAXUSDT — 70 `WATCH` → `BLOCKED`
+6. BTCUSDT — 66 `WATCH` → `BLOCKED`
+7. DOGEUSDT — 66 `WATCH` → `BLOCKED`
+8. UNIUSDT — 66 `WATCH` → `BLOCKED`
+9. SUIUSDT — 65 `WATCH` → `BLOCKED`
+10. ADAUSDT — 64 `WATCH` → `BLOCKED`
+11. BNBUSDT — 60 `WATCH` → `BLOCKED`
+12. AAVEUSDT — 44 `LOW_INTEREST` → `SCANNED_ONLY`
+
+These market values are a time-specific validation checkpoint, not golden trading outputs. A connector rate-limit (`-1003`) occurred during the initial large parallel request; the batch remained blocked until the two missing BTC calls were retried successfully.
+
 ## Last verified repository baseline
 
 Implementation baseline immediately before adding this document:
@@ -223,25 +264,20 @@ Always inspect the current `main` commit and latest CI instead of assuming this 
 
 ## NEXT STEP
 
-### Validate the complete 12-coin real watchlist through the read-only pipeline
+### Add a rate-limit-aware Binance MCP acquisition runner
 
-Implement and verify a repeatable multi-symbol real-feed validation flow:
+Build the host-side layer that feeds `validate_watchlist_batch` safely and repeatably:
 
-1. Read enabled symbols and priorities from `config/watchlist.json`.
-2. Use Binance MCP Spot endpoints only; do not use web data.
-3. Fetch current price plus required `1D`, `4H`, `1H`, and `15M` klines for every enabled symbol.
-4. Capture one explicit decision time for the whole batch.
-5. Normalize timestamps and OHLCV.
-6. Remove every candle whose close time is later than the batch decision time.
-7. Reject missing, duplicate, descending, stale, or future data.
-8. Apply history sufficiency before analysis.
-9. Run Scanner for all valid symbols.
-10. Rank candidates without forcing a signal.
-11. Run Wyckoff + SMC deep analysis only for eligible candidates.
-12. Enforce Spot semantics: bearish means `AVOID_BUY / NO_TRADE`, never Futures SHORT.
-13. Produce a deterministic paper-only validation report.
-14. Add tests for all new batch-level safety behavior.
-15. Push to `main` and wait for green CI.
+1. Load the enabled watchlist without hard-coded symbols.
+2. Capture one aligned 1H decision boundary for the batch.
+3. Fetch symbols in bounded groups instead of one 60-request burst.
+4. Retry only transient/rate-limited read-only calls with bounded backoff.
+5. Never retry malformed, unauthorized, or structurally invalid data as if it were transient.
+6. Preserve successful symbol/timeframe responses when another request needs retry.
+7. Emit an explicit incomplete-batch result if the retry budget is exhausted.
+8. Pass the immutable complete snapshot to `validate_watchlist_batch`.
+9. Add deterministic tests using an injected fake MCP invoker; CI must not depend on live Binance.
+10. Keep all order, account, wallet, transfer, and credential capabilities outside this runner.
 
 Do not expand to autonomous execution. Do not send exchange orders.
 

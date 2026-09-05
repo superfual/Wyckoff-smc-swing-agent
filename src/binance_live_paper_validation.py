@@ -68,7 +68,7 @@ def _reference_close_time(market: MarketData, timeframe: str) -> int | None:
     return candles[-1].timestamp + _TIMEFRAME_MS[timeframe]
 
 
-def _validate_symbol_feed(
+def validate_symbol_feed(
     market: MarketData,
     *,
     decision_time: int,
@@ -101,6 +101,12 @@ def _validate_symbol_feed(
     if runner_config.require_exact_reference_close and reference_close is not None and reference_close != decision_time:
         blockers.append("REFERENCE_CANDLE_NOT_FRESH")
     for timeframe, field in _TIMEFRAME_FIELD.items():
+        raw = getattr(market, field)
+        raw_timestamps = [candle.timestamp for candle in raw]
+        if any(current <= previous for previous, current in zip(raw_timestamps, raw_timestamps[1:])):
+            blockers.append(f"NON_MONOTONIC_CANDLES:{timeframe}")
+        if any(timestamp > decision_time for timestamp in raw_timestamps):
+            blockers.append(f"FUTURE_CANDLE_TIMESTAMP:{timeframe}")
         candles = getattr(closed, field)
         if not candles:
             blockers.append(f"MISSING_TIMEFRAME:{timeframe}")
@@ -189,7 +195,7 @@ def validate_binance_live_paper_feed(
         blockers.append("UNEXPECTED_PROVIDER_SYMBOLS:" + ",".join(unexpected))
 
     validations = tuple(
-        _validate_symbol_feed(
+        validate_symbol_feed(
             market,
             decision_time=decision_time,
             runner_config=runner_cfg,
