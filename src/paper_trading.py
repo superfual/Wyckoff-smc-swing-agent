@@ -7,6 +7,8 @@ and manages a virtual position using only information available at that moment.
 No exchange orders are sent and no future candles are inspected.
 
 V1 is intentionally Spot-first: only ENTER_LONG can open a virtual position.
+V1.1 books entry fees immediately and marks open positions to the latest closed
+reference price so paper equity reflects unrealized PnL.
 """
 
 from __future__ import annotations
@@ -97,6 +99,8 @@ class PaperAccount:
     events: list[PaperEvent] = field(default_factory=list)
     last_processed_timestamp: int | None = None
     cooldown_bars_remaining: int = 0
+    unrealized_pnl: float = 0.0
+    mark_price: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -138,16 +142,39 @@ def _reference_candle(market: MarketData, timeframe: str) -> Candle | None:
     return candles[-1] if candles else None
 
 
+def _mark_to_market(account: PaperAccount, price: float) -> None:
+    """Update account equity by only the change in unrealized PnL."""
+    previous = account.unrealized_pnl
+    position = account.open_position
+    if position is None:
+        current = 0.0
+        account.mark_price = None
+    else:
+        current = position.units * (price - position.entry_price)
+        account.mark_price = price
+    account.unrealized_pnl = current
+    account.equity += current - previous
+
+
 def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, reason: PaperExitReason, cfg: PaperTradingConfig) -> PaperTrade:
     position = account.open_position
     assert position is not None
+
+    # Remove the previously marked unrealized component before booking realized PnL.
+    account.equity -= account.unrealized_pnl
+    account.unrealized_pnl = 0.0
+    account.mark_price = None
+
     exit_price = _exit_fill(planned_exit, cfg.slippage_bps_per_side)
     gross_pnl = position.units * (exit_price - position.entry_price)
     exit_fee = position.units * exit_price * cfg.fee_bps_per_side / 10_000
-    fees = position.entry_fee_quote + exit_fee
-    net_pnl = gross_pnl - fees
+    total_fees = position.entry_fee_quote + exit_fee
+    lifecycle_net_pnl = gross_pnl - total_fees
+
+    # Entry fee was already booked at OPEN, so only gross PnL minus exit fee is new now.
+    close_realized_delta = gross_pnl - exit_fee
     risk_quote = position.units * (position.entry_price - position.stop_price)
-    net_r = net_pnl / risk_quote if risk_quote > 0 else 0.0
+    net_r = lifecycle_net_pnl / risk_quote if risk_quote > 0 else 0.0
     trade = PaperTrade(
         symbol=position.symbol,
         direction=position.direction,
@@ -159,14 +186,14 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
         target_price=round(position.target_price, 8),
         position_size_quote=round(position.position_size_quote, 8),
         gross_pnl_quote=round(gross_pnl, 8),
-        fees_quote=round(fees, 8),
-        net_pnl_quote=round(net_pnl, 8),
+        fees_quote=round(total_fees, 8),
+        net_pnl_quote=round(lifecycle_net_pnl, 8),
         net_r=round(net_r, 4),
         outcome="WIN" if reason == "TARGET" else "LOSS",
         exit_reason=reason,
     )
-    account.realized_pnl += net_pnl
-    account.equity += net_pnl
+    account.realized_pnl += close_realized_delta
+    account.equity += close_realized_delta
     account.trades.append(trade)
     account.open_position = None
     account.cooldown_bars_remaining = cfg.cooldown_bars_after_exit
@@ -257,9 +284,15 @@ def process_paper_snapshot(
                 units=units,
                 entry_fee_quote=entry_fee,
             )
-            event = PaperEvent(timestamp, "OPEN", "ENTER_LONG", f"Virtual long opened at {entry:.8f} with {size_quote:.2f} quote exposure.")
+            # Book entry fee immediately instead of delaying it until CLOSE.
+            account.realized_pnl -= entry_fee
+            account.equity -= entry_fee
+            event = PaperEvent(timestamp, "OPEN", "ENTER_LONG", f"Virtual long opened at {entry:.8f} with {size_quote:.2f} quote exposure; entry fee {entry_fee:.2f} booked.")
             events.append(event)
             account.events.append(event)
+
+    # Mark any surviving/newly opened position using the current closed reference price.
+    _mark_to_market(account, market.current_price)
 
     if account.cooldown_bars_remaining > 0 and not closed_this_step:
         account.cooldown_bars_remaining -= 1
