@@ -43,10 +43,10 @@ OrderBlockStatus = Literal["FRESH", "TOUCHED", "MITIGATED", "INVALIDATED"]
 class SwingPoint:
     kind: SwingKind
     index: int
-    confirmed_index: int
     timestamp: int
     price: float
     strength: int
+    confirmed_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -70,8 +70,8 @@ class LiquidityPool:
     swing_indices: tuple[int, ...]
     first_index: int
     last_index: int
-    confirmed_index: int
     touches: int
+    confirmed_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ class LiquiditySweep:
     penetration_pct: float
     pool_kind: LiquidityPoolKind
     pool_last_index: int
-    pool_confirmed_index: int
+    pool_confirmed_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -148,6 +148,10 @@ def _timeframe_candles(market: MarketData, timeframe: str) -> list[Candle]:
     return mapping[timeframe]
 
 
+def _confirmed_index(swing: SwingPoint) -> int:
+    return swing.confirmed_index if swing.confirmed_index >= 0 else swing.index
+
+
 def detect_swings(candles: list[Candle], left: int = 2, right: int = 2) -> list[SwingPoint]:
     if left < 1 or right < 1:
         raise ValueError("left and right must both be >= 1")
@@ -162,9 +166,9 @@ def detect_swings(candles: list[Candle], left: int = 2, right: int = 2) -> list[
         is_low = all(candle.low < x.low for x in left_window) and all(candle.low <= x.low for x in right_window)
         confirmed_index = index + right
         if is_high:
-            swings.append(SwingPoint("HIGH", index, confirmed_index, candle.timestamp, candle.high, min(left, right)))
+            swings.append(SwingPoint("HIGH", index, candle.timestamp, candle.high, min(left, right), confirmed_index))
         if is_low:
-            swings.append(SwingPoint("LOW", index, confirmed_index, candle.timestamp, candle.low, min(left, right)))
+            swings.append(SwingPoint("LOW", index, candle.timestamp, candle.low, min(left, right), confirmed_index))
     return sorted(swings, key=lambda s: (s.index, s.kind))
 
 
@@ -204,8 +208,8 @@ def detect_structure_events(candles: list[Candle], swings: list[SwingPoint], use
     consumed: set[tuple[str, int]] = set()
     active_bias: str | None = None
     for candle_index, candle in enumerate(candles):
-        prior_highs = [s for s in swings if s.kind == "HIGH" and s.confirmed_index <= candle_index]
-        prior_lows = [s for s in swings if s.kind == "LOW" and s.confirmed_index <= candle_index]
+        prior_highs = [s for s in swings if s.kind == "HIGH" and _confirmed_index(s) <= candle_index]
+        prior_lows = [s for s in swings if s.kind == "LOW" and _confirmed_index(s) <= candle_index]
         if not prior_highs or not prior_lows:
             continue
         last_high, last_low = prior_highs[-1], prior_lows[-1]
@@ -258,7 +262,7 @@ def detect_liquidity_pools(swings: list[SwingPoint], tolerance_pct: float = 0.25
             if len(group) < min_touches:
                 continue
             level = sum(x.price for x in group) / len(group)
-            confirmed_index = max(x.confirmed_index for x in group)
+            confirmed_index = max(_confirmed_index(x) for x in group)
             pools.append(LiquidityPool(
                 "EQUAL_HIGHS" if kind == "HIGH" else "EQUAL_LOWS",
                 "BUY_SIDE" if kind == "HIGH" else "SELL_SIDE",
@@ -267,10 +271,10 @@ def detect_liquidity_pools(swings: list[SwingPoint], tolerance_pct: float = 0.25
                 tuple(x.index for x in group),
                 group[0].index,
                 group[-1].index,
-                confirmed_index,
                 len(group),
+                confirmed_index,
             ))
-    return sorted(pools, key=lambda p: (p.confirmed_index, p.side))
+    return sorted(pools, key=lambda p: (p.confirmed_index if p.confirmed_index >= 0 else p.last_index, p.side))
 
 
 def detect_liquidity_sweeps(candles: list[Candle], pools: list[LiquidityPool], min_penetration_pct: float = 0.01) -> list[LiquiditySweep]:
@@ -281,9 +285,10 @@ def detect_liquidity_sweeps(candles: list[Candle], pools: list[LiquidityPool], m
     for pool in pools:
         if pool.level <= 0:
             continue
-        for index in range(pool.confirmed_index + 1, len(candles)):
+        pool_confirmed = pool.confirmed_index if pool.confirmed_index >= 0 else pool.last_index
+        for index in range(pool_confirmed + 1, len(candles)):
             candle = candles[index]
-            key = (pool.side, pool.confirmed_index)
+            key = (pool.side, pool_confirmed)
             if key in consumed:
                 break
             if pool.side == "BUY_SIDE":
@@ -292,7 +297,7 @@ def detect_liquidity_sweeps(candles: list[Candle], pools: list[LiquidityPool], m
                     sweeps.append(LiquiditySweep(
                         "BUY_SIDE", "BEARISH", index, candle.timestamp, pool.level,
                         candle.high, candle.close, round(penetration, 4), pool.kind,
-                        pool.last_index, pool.confirmed_index,
+                        pool.last_index, pool_confirmed,
                     ))
                     consumed.add(key)
             else:
@@ -301,7 +306,7 @@ def detect_liquidity_sweeps(candles: list[Candle], pools: list[LiquidityPool], m
                     sweeps.append(LiquiditySweep(
                         "SELL_SIDE", "BULLISH", index, candle.timestamp, pool.level,
                         candle.low, candle.close, round(penetration, 4), pool.kind,
-                        pool.last_index, pool.confirmed_index,
+                        pool.last_index, pool_confirmed,
                     ))
                     consumed.add(key)
     return sorted(sweeps, key=lambda s: s.index)
