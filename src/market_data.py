@@ -13,7 +13,7 @@ into structures used by the scanner and strategy engine.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 
 @dataclass
@@ -36,27 +36,16 @@ class MarketData:
     fifteen_minute: list[Candle]
 
 
+_TIMEFRAME_FIELDS = {
+    "1D": "daily",
+    "4H": "four_hour",
+    "1H": "one_hour",
+    "15M": "fifteen_minute",
+}
+
+
 def normalize_kline(raw_kline: list[Any]) -> Candle:
-    """
-    Convert one Binance Spot kline into a Candle.
-
-    Expected Binance kline format:
-
-    [
-        open_time,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        close_time,
-        quote_asset_volume,
-        number_of_trades,
-        taker_buy_base_volume,
-        taker_buy_quote_volume,
-        ignore
-    ]
-    """
+    """Convert one Binance Spot kline into a Candle."""
 
     if len(raw_kline) < 6:
         raise ValueError("Invalid Binance kline: expected at least 6 fields")
@@ -72,40 +61,25 @@ def normalize_kline(raw_kline: list[Any]) -> Candle:
 
 
 def normalize_klines(raw_klines: list[list[Any]]) -> list[Candle]:
-    """
-    Normalize a Binance kline response.
-    """
+    """Normalize a Binance kline response."""
 
     return [normalize_kline(kline) for kline in raw_klines]
 
 
 def normalize_price(raw_price: Any) -> float | None:
-    """
-    Normalize the Binance ticker price response.
-
-    Supported examples:
-
-    {"symbol": "BTCUSDT", "price": "79636.90"}
-
-    or:
-
-    "79636.90"
-    """
+    """Normalize a Binance ticker-price response into a float."""
 
     if raw_price is None:
         return None
 
     if isinstance(raw_price, dict):
         value = raw_price.get("price")
-
         if value is None:
             return None
-
         return float(value)
 
     try:
         return float(raw_price)
-
     except (TypeError, ValueError):
         return None
 
@@ -118,10 +92,7 @@ def build_market_data(
     one_hour_klines: list[list[Any]],
     fifteen_minute_klines: list[list[Any]],
 ) -> MarketData:
-    """
-    Build the normalized multi-timeframe market object
-    consumed by the strategy engine.
-    """
+    """Build the normalized multi-timeframe object consumed by strategy modules."""
 
     return MarketData(
         symbol=symbol.upper(),
@@ -134,9 +105,7 @@ def build_market_data(
 
 
 def candle_to_dict(candle: Candle) -> dict:
-    """
-    Convert a Candle object into a serializable dictionary.
-    """
+    """Convert a Candle object into a serializable dictionary."""
 
     return {
         "timestamp": candle.timestamp,
@@ -149,10 +118,7 @@ def candle_to_dict(candle: Candle) -> dict:
 
 
 def market_data_to_dict(market: MarketData) -> dict:
-    """
-    Convert normalized MarketData into a dictionary suitable
-    for JSON output or downstream agent reasoning.
-    """
+    """Convert normalized MarketData into JSON-friendly output."""
 
     return {
         "symbol": market.symbol,
@@ -166,30 +132,38 @@ def market_data_to_dict(market: MarketData) -> dict:
     }
 
 
-def validate_market_data(market: MarketData) -> tuple[bool, list[str]]:
+def validate_market_data(
+    market: MarketData,
+    required_timeframes: Iterable[str] | None = None,
+    require_current_price: bool = True,
+) -> tuple[bool, list[str]]:
     """
-    Validate whether the required market data is available.
+    Validate only the data required by the calling engine.
 
-    Returns:
-        (is_valid, errors)
+    By default all supported timeframes and current price are required,
+    preserving the scanner's original strict behavior. Strategy modules can
+    request a smaller subset, for example Wyckoff can require only ``4H``.
     """
 
-    errors = []
+    errors: list[str] = []
 
-    if market.current_price is None:
+    if require_current_price and market.current_price is None:
         errors.append("CURRENT_PRICE_UNAVAILABLE")
 
-    if not market.daily:
-        errors.append("1D_DATA_UNAVAILABLE")
+    requested = (
+        list(_TIMEFRAME_FIELDS)
+        if required_timeframes is None
+        else [str(timeframe).upper() for timeframe in required_timeframes]
+    )
 
-    if not market.four_hour:
-        errors.append("4H_DATA_UNAVAILABLE")
+    unknown = [timeframe for timeframe in requested if timeframe not in _TIMEFRAME_FIELDS]
+    if unknown:
+        raise ValueError(f"Unsupported timeframe(s): {', '.join(unknown)}")
 
-    if not market.one_hour:
-        errors.append("1H_DATA_UNAVAILABLE")
-
-    if not market.fifteen_minute:
-        errors.append("15M_DATA_UNAVAILABLE")
+    for timeframe in requested:
+        field_name = _TIMEFRAME_FIELDS[timeframe]
+        if not getattr(market, field_name):
+            errors.append(f"{timeframe}_DATA_UNAVAILABLE")
 
     return len(errors) == 0, errors
 
