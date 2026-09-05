@@ -13,16 +13,18 @@ def _series(step: int, count: int, end_time: int, close: float = 100.0):
     return [Candle(start + i * step, close, close + 1, close - 1, close, 10.0) for i in range(count)]
 
 
-def _market(symbol: str, decision_time: int, *, stale_reference: bool = False):
+def _market(symbol: str, decision_time: int, *, stale_reference: bool = False, include_open: bool = False):
     reference_end = decision_time - HOUR if stale_reference else decision_time
-    return MarketData(
-        symbol,
-        None,
-        _series(DAY, 2, decision_time),
-        _series(4 * HOUR, 3, decision_time),
-        _series(HOUR, 4, reference_end),
-        _series(15 * 60_000, 8, decision_time),
-    )
+    daily = _series(DAY, 2, decision_time)
+    four_hour = _series(4 * HOUR, 3, decision_time)
+    one_hour = _series(HOUR, 4, reference_end)
+    fifteen = _series(15 * 60_000, 8, decision_time)
+    if include_open:
+        daily.append(Candle(decision_time, 100, 101, 99, 100, 10))
+        four_hour.append(Candle(decision_time, 100, 101, 99, 100, 10))
+        one_hour.append(Candle(decision_time, 100, 101, 99, 100, 10))
+        fifteen.append(Candle(decision_time, 100, 101, 99, 100, 10))
+    return MarketData(symbol, None, daily, four_hour, one_hour, fifteen)
 
 
 class Provider:
@@ -77,8 +79,34 @@ def test_preflight_passes_fresh_complete_feed_without_mutating_runtime(tmp_path)
     assert result.ready is True
     assert result.blockers == ()
     assert result.symbols[0].valid is True
+    assert result.symbols[0].warnings == ()
     assert runtime.session.to_dict() == before_session
     assert runtime.runner_state.to_dict() == before_state
+
+
+def test_preflight_treats_current_open_binance_candle_as_expected_warning(tmp_path):
+    decision_time = 10 * DAY
+    runtime = _runtime(tmp_path)
+    result = validate_binance_live_paper_feed(
+        runtime,
+        Provider([_market("BTCUSDT", decision_time, include_open=True)]),
+        decision_time=decision_time,
+        runtime_config=PaperRuntimeConfig(
+            checkpoint_path="state/live-test.json",
+            auto_recover=True,
+            checkpoint_after_cycle=True,
+            require_all_symbols=True,
+        ),
+        runner_config=PaperRunnerConfig(require_exact_reference_close=True),
+    )
+
+    assert result.ready is True
+    symbol = result.symbols[0]
+    assert symbol.valid is True
+    assert symbol.blockers == ()
+    assert dict(symbol.open_candle_counts) == {"1d": 1, "4h": 1, "1h": 1, "15m": 1}
+    assert "EXPECTED_OPEN_CANDLE_DROPPED:1h:1" in symbol.warnings
+    assert dict(symbol.raw_candle_counts)["1h"] == dict(symbol.candle_counts)["1h"] + 1
 
 
 def test_preflight_blocks_stale_reference_candle(tmp_path):
