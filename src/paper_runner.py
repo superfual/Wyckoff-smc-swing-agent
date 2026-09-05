@@ -7,8 +7,8 @@ adapter, strips candles that are not closed at decision time, and feeds the
 result into the shared PaperSession with portfolio-level entry safety guards.
 
 V2 builds an immutable same-cycle allocation plan for fresh Spot candidates and
-supports idempotent same-time retries by processing only symbols that have not
-already consumed the decision timestamp.
+supports idempotent same-time retries only for demonstrably partial cycles. Fully
+processed replays remain non-monotonic and fail closed.
 
 This module performs no network requests, stores no credentials and sends no
 exchange orders.
@@ -201,6 +201,16 @@ def _build_allocation_plan(session: PaperSession, closed_markets: list[MarketDat
     return tuple(sorted(plan, key=lambda item: (0 if item.status == "LIFECYCLE" else 1 if item.status == "SELECTED" else 2, item.rank or 9999, item.symbol)))
 
 
+def _same_time_retry_is_partial(state: PaperRunnerState, session: PaperSession, markets: list[MarketData], decision_time: int) -> bool:
+    if state.last_cycle_time != decision_time:
+        return False
+    statuses = []
+    for market in markets:
+        account = session.accounts.get(market.symbol.upper()) or session.accounts.get(market.symbol)
+        statuses.append(bool(account and account.last_processed_timestamp is not None and account.last_processed_timestamp >= decision_time))
+    return bool(statuses) and any(statuses) and not all(statuses)
+
+
 def run_paper_cycle(
     state: PaperRunnerState,
     session: PaperSession,
@@ -216,13 +226,15 @@ def run_paper_cycle(
 ) -> RunnerCycleResult:
     cfg = config or PaperRunnerConfig()
     errors: list[str] = []
-    retry = state.last_cycle_time == decision_time
+    retry = _same_time_retry_is_partial(state, session, markets, decision_time)
 
     if cfg.reference_timeframe not in _TIMEFRAME_FIELD:
         errors.append("INVALID_REFERENCE_TIMEFRAME")
     if decision_time < 0:
         errors.append("INVALID_DECISION_TIME")
     if state.last_cycle_time is not None and decision_time < state.last_cycle_time:
+        errors.append("NON_MONOTONIC_CYCLE_TIME")
+    if state.last_cycle_time == decision_time and not retry:
         errors.append("NON_MONOTONIC_CYCLE_TIME")
     if errors:
         state.errors.extend(errors)
@@ -292,8 +304,9 @@ def run_paper_cycle(
             continue
         allocation = by_symbol.get(symbol)
         allocation_blockers: tuple[str, ...] = ()
-        if allocation and allocation.status == "NOT_SELECTED" and allocation.reason in {"PORTFOLIO_SLOT_EXHAUSTED"} or (allocation and allocation.status == "NOT_SELECTED" and allocation.reason.startswith("CORRELATION_SLOT_EXHAUSTED:")):
-            allocation_blockers = (allocation.reason,)
+        if allocation and allocation.status == "NOT_SELECTED":
+            if allocation.reason == "PORTFOLIO_SLOT_EXHAUSTED" or allocation.reason.startswith("CORRELATION_SLOT_EXHAUSTED:"):
+                allocation_blockers = (allocation.reason,)
 
         step = process_session_snapshot(
             session,
