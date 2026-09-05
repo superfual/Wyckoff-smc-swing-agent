@@ -16,6 +16,7 @@ from typing import Any, Callable, Sequence
 try:
     from .binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from .binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
+    from .paper_report import PaperCycleReport, build_paper_cycle_report
     from .paper_runtime import (
         PaperRuntime,
         PaperRuntimeConfig,
@@ -32,6 +33,7 @@ try:
 except ImportError:
     from binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
+    from paper_report import PaperCycleReport, build_paper_cycle_report
     from paper_runtime import (
         PaperRuntime,
         PaperRuntimeConfig,
@@ -82,6 +84,12 @@ class BinancePaperHost:
     config: BinancePaperHostConfig
 
 
+@dataclass(frozen=True)
+class BinancePaperCycleOutput:
+    result: RuntimeCycleResult
+    report: PaperCycleReport
+
+
 def create_binance_paper_host(
     tool_call: ToolCall,
     *,
@@ -119,6 +127,17 @@ def run_binance_paper_cycle(
         risk_config=cfg.risk,
         execution_config=cfg.execution,
     )
+
+
+def run_binance_paper_cycle_with_report(
+    host: BinancePaperHost,
+    *,
+    decision_time: int,
+) -> BinancePaperCycleOutput:
+    """Run one paper cycle and return a human/operator-facing decision snapshot."""
+    result = run_binance_paper_cycle(host, decision_time=decision_time)
+    report = build_paper_cycle_report(result, host.runtime.session)
+    return BinancePaperCycleOutput(result=result, report=report)
 
 
 if __name__ == "__main__":
