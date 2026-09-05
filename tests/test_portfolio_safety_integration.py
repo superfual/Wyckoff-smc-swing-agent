@@ -35,6 +35,17 @@ def _enter_decision(symbol="BTCUSDT"):
     )
 
 
+def _wait_decision(symbol="BTCUSDT"):
+    return SimpleNamespace(
+        symbol=symbol,
+        action="WAIT",
+        execution=None,
+        reasons=[],
+        interpretation="wait",
+        errors=[],
+    )
+
+
 def test_external_portfolio_blocker_converts_entry_to_blocked(monkeypatch):
     monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _enter_decision())
     account = create_paper_account()
@@ -85,3 +96,35 @@ def test_kill_switch_blocks_new_entry_but_does_not_force_close_existing_position
 
     assert session.accounts["BTCUSDT"].open_position is not None
     assert not any(event.kind == "CLOSE" for event in result.events)
+
+
+def test_session_correlation_guard_cancels_old_pending_order_before_fill(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda market, **k: _wait_decision(market.symbol))
+    session = create_paper_session()
+
+    btc = create_paper_account()
+    btc.open_position = PaperPosition("BTCUSDT", "LONG", 0, 100, 90, 120, 1000, 10, 1)
+    eth = create_paper_account()
+    eth.open_position = PaperPosition("ETHUSDT", "LONG", 0, 100, 90, 120, 1000, 10, 1)
+    sol = create_paper_account()
+    sol.pending_entry_price = 100.0
+    sol.pending_stop_price = 95.0
+    sol.pending_target_price = 110.0
+    sol.pending_size_quote = 1000.0
+    sol.pending_created_timestamp = 0
+    session.accounts.update({"BTCUSDT": btc, "ETHUSDT": eth, "SOLUSDT": sol})
+
+    result = process_session_snapshot(
+        session,
+        _market("SOLUSDT", 100),
+        timestamp=1,
+        portfolio_safety_config=PortfolioSafetyConfig(
+            max_concurrent_positions=5,
+            max_positions_per_correlation_group=2,
+        ),
+    )
+
+    assert session.accounts["SOLUSDT"].pending_entry_price is None
+    assert session.accounts["SOLUSDT"].open_position is None
+    cancel = next(event for event in result.events if event.kind == "CANCEL")
+    assert "CORRELATION_GROUP_LIMIT_REACHED:CRYPTO_BETA" in cancel.note
