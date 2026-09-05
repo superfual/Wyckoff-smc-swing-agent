@@ -2,7 +2,7 @@
 
 Turns RuntimeCycleResult + PaperSession state into a compact, serializable report
 for human inspection. Reporting is read-only: it does not alter strategy state,
-positions, risk decisions, checkpoints, or exchange state.
+positions, risk decisions, checkpoints, safety state, or exchange state.
 """
 
 from __future__ import annotations
@@ -54,6 +54,8 @@ class PaperCycleReport:
     exposure_pct: float
     open_positions: int
     total_trades: int
+    kill_switch_active: bool = False
+    daily_pnl_pct: float = 0.0
     symbols: tuple[SymbolDecisionSnapshot, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -68,7 +70,6 @@ def _round_optional(value: Any, digits: int = 2) -> float | None:
 
 
 def build_paper_cycle_report(result: RuntimeCycleResult, session: PaperSession) -> PaperCycleReport:
-    """Build a read-only decision report from one completed runtime cycle."""
     summary = summarize_paper_session(session)
     snapshots: list[SymbolDecisionSnapshot] = []
 
@@ -130,20 +131,22 @@ def build_paper_cycle_report(result: RuntimeCycleResult, session: PaperSession) 
         exposure_pct=summary.exposure_pct,
         open_positions=summary.open_positions,
         total_trades=summary.total_trades,
+        kill_switch_active=summary.kill_switch_active,
+        daily_pnl_pct=summary.daily_pnl_pct,
         symbols=tuple(snapshots),
         errors=tuple(dict.fromkeys(errors)),
     )
 
 
 def render_paper_cycle_report(report: PaperCycleReport) -> str:
-    """Render a deterministic plain-text operator view."""
     lines = [
         f"PAPER CYCLE {report.decision_time}",
         (
             f"Portfolio: equity={report.equity:.2f} | realized={report.realized_pnl:.2f} | "
-            f"unrealized={report.unrealized_pnl:.2f} | exposure={report.exposure_pct:.2f}% | "
-            f"open={report.open_positions} | trades={report.total_trades}"
+            f"unrealized={report.unrealized_pnl:.2f} | daily={report.daily_pnl_pct:.2f}% | "
+            f"exposure={report.exposure_pct:.2f}% | open={report.open_positions} | trades={report.total_trades}"
         ),
+        f"Safety: kill_switch={'ON' if report.kill_switch_active else 'OFF'}",
         (
             f"Cycle: processed={report.processed_symbols} | skipped={report.skipped_symbols} | "
             f"checkpoint={'YES' if report.checkpoint_saved else 'NO'}"
