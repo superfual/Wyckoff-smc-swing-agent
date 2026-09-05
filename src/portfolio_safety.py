@@ -11,11 +11,29 @@ from dataclasses import asdict, dataclass
 
 DAY_MS = 86_400_000
 
+# Conservative V1 correlation buckets for the curated Spot watchlist. This is
+# intentionally a concentration proxy, not a claim of stable statistical correlation.
+CORRELATION_GROUPS: dict[str, str] = {
+    "BTCUSDT": "CRYPTO_BETA",
+    "ETHUSDT": "CRYPTO_BETA",
+    "BNBUSDT": "CRYPTO_BETA",
+    "SOLUSDT": "CRYPTO_BETA",
+    "XRPUSDT": "ALT_BETA",
+    "DOGEUSDT": "ALT_BETA",
+    "ADAUSDT": "ALT_BETA",
+    "AVAXUSDT": "ALT_BETA",
+    "SUIUSDT": "ALT_BETA",
+    "LINKUSDT": "DEFI_BETA",
+    "UNIUSDT": "DEFI_BETA",
+    "AAVEUSDT": "DEFI_BETA",
+}
+
 
 @dataclass(frozen=True)
 class PortfolioSafetyConfig:
     max_concurrent_positions: int = 3
     max_daily_loss_pct: float = 3.0
+    max_positions_per_correlation_group: int = 2
 
 
 @dataclass
@@ -44,10 +62,11 @@ def _validate_config(config: PortfolioSafetyConfig) -> None:
         raise ValueError("max_concurrent_positions must be > 0")
     if config.max_daily_loss_pct <= 0 or config.max_daily_loss_pct > 100:
         raise ValueError("max_daily_loss_pct must be in (0, 100]")
+    if config.max_positions_per_correlation_group <= 0:
+        raise ValueError("max_positions_per_correlation_group must be > 0")
 
 
 def set_kill_switch(state: PortfolioSafetyState, active: bool) -> None:
-    """Explicitly enable/disable the persistent portfolio entry kill switch."""
     state.kill_switch_active = bool(active)
 
 
@@ -57,6 +76,8 @@ def assess_portfolio_safety(
     timestamp: int,
     equity: float,
     open_positions: int,
+    candidate_symbol: str | None = None,
+    open_symbols: tuple[str, ...] = (),
     config: PortfolioSafetyConfig | None = None,
 ) -> PortfolioSafetyAssessment:
     """Evaluate whether the portfolio may open another position."""
@@ -84,6 +105,14 @@ def assess_portfolio_safety(
         blockers.append("MAX_CONCURRENT_POSITIONS_REACHED")
     if daily_pnl_pct <= -cfg.max_daily_loss_pct:
         blockers.append("DAILY_LOSS_LIMIT_REACHED")
+
+    if candidate_symbol:
+        candidate = candidate_symbol.upper()
+        group = CORRELATION_GROUPS.get(candidate)
+        if group:
+            group_count = sum(CORRELATION_GROUPS.get(symbol.upper()) == group for symbol in open_symbols)
+            if group_count >= cfg.max_positions_per_correlation_group:
+                blockers.append(f"CORRELATION_GROUP_LIMIT_REACHED:{group}")
 
     return PortfolioSafetyAssessment(
         allow_new_entries=not blockers,
