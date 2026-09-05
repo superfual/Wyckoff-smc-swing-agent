@@ -6,6 +6,9 @@ Serializes PaperSession + PaperRunnerState into a versioned JSON checkpoint and
 restores them after restart. Writes use an atomic temp-file replace so a process
 interruption is less likely to leave a partially written checkpoint.
 
+V1 checkpoints are migrated additively for Paper Equity V1.1: legacy open
+positions had not yet booked entry fees and had no unrealized mark state.
+
 This module stores no exchange credentials and sends no orders.
 """
 
@@ -87,31 +90,52 @@ def _event(raw: dict[str, Any]) -> PaperEvent:
     return PaperEvent(**raw)
 
 
+def _legacy_open_entry_fee(raw: dict[str, Any]) -> float:
+    if "unrealized_pnl" in raw:
+        return 0.0
+    position = raw.get("open_position")
+    if not isinstance(position, dict):
+        return 0.0
+    return float(position.get("entry_fee_quote", 0.0) or 0.0)
+
+
 def _account(raw: dict[str, Any]) -> PaperAccount:
+    legacy_fee = _legacy_open_entry_fee(raw)
     return PaperAccount(
         initial_equity=raw["initial_equity"],
-        equity=raw["equity"],
-        realized_pnl=raw.get("realized_pnl", 0.0),
+        equity=raw["equity"] - legacy_fee,
+        realized_pnl=raw.get("realized_pnl", 0.0) - legacy_fee,
         open_position=_position(raw.get("open_position")),
         trades=[_trade(item) for item in raw.get("trades", [])],
         events=[_event(item) for item in raw.get("events", [])],
         last_processed_timestamp=raw.get("last_processed_timestamp"),
         cooldown_bars_remaining=raw.get("cooldown_bars_remaining", 0),
+        unrealized_pnl=raw.get("unrealized_pnl", 0.0),
+        mark_price=raw.get("mark_price"),
     )
 
 
 def _session(raw: dict[str, Any]) -> PaperSession:
+    raw_accounts = raw.get("accounts", {})
+    accounts = {symbol: _account(account) for symbol, account in raw_accounts.items()}
+    legacy_fee = 0.0 if "unrealized_pnl" in raw else sum(_legacy_open_entry_fee(account) for account in raw_accounts.values())
+    realized = raw.get("realized_pnl", 0.0) - legacy_fee
+    unrealized = raw.get("unrealized_pnl", 0.0)
+    equity = raw["equity"] if "unrealized_pnl" in raw else raw["initial_equity"] + realized + unrealized
     session = PaperSession(
         initial_equity=raw["initial_equity"],
-        equity=raw["equity"],
-        realized_pnl=raw.get("realized_pnl", 0.0),
-        accounts={symbol: _account(account) for symbol, account in raw.get("accounts", {}).items()},
+        equity=equity,
+        realized_pnl=realized,
+        accounts=accounts,
         journal=[JournalEntry(**item) for item in raw.get("journal", [])],
         equity_curve=[SessionEquityPoint(**item) for item in raw.get("equity_curve", [])],
         action_counts=dict(raw.get("action_counts", {})),
         decisions=raw.get("decisions", 0),
         errors=list(raw.get("errors", [])),
+        unrealized_pnl=unrealized,
     )
+    for account in session.accounts.values():
+        account.equity = session.equity
     return session
 
 
