@@ -1,0 +1,24 @@
+name: Real BTC Snapshot
+
+on:
+  push:
+    paths:
+      - 'scripts/run_real_btc_snapshot.py'
+      - 'tests/fixtures/btcusdt_spot_20260905_1800.json.zlib.b64'
+      - '.github/workflows/real-btc-snapshot.yml'
+  workflow_dispatch:
+
+jobs:
+  run-real-btc-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run BTCUSDT real snapshot through V1
+        run: python scripts/run_real_btc_snapshot.py
