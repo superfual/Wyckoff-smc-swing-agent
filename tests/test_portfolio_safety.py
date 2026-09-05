@@ -27,6 +27,39 @@ def test_max_concurrent_positions_blocks_new_entries():
     assert "MAX_CONCURRENT_POSITIONS_REACHED" in result.blockers
 
 
+def test_correlation_group_blocks_third_crypto_beta_position():
+    result = assess_portfolio_safety(
+        state=PortfolioSafetyState(),
+        timestamp=DAY_MS,
+        equity=10_000,
+        open_positions=2,
+        candidate_symbol="SOLUSDT",
+        open_symbols=("BTCUSDT", "ETHUSDT"),
+        config=PortfolioSafetyConfig(
+            max_concurrent_positions=5,
+            max_positions_per_correlation_group=2,
+        ),
+    )
+    assert result.allow_new_entries is False
+    assert "CORRELATION_GROUP_LIMIT_REACHED:CRYPTO_BETA" in result.blockers
+
+
+def test_different_correlation_group_can_still_enter():
+    result = assess_portfolio_safety(
+        state=PortfolioSafetyState(),
+        timestamp=DAY_MS,
+        equity=10_000,
+        open_positions=2,
+        candidate_symbol="UNIUSDT",
+        open_symbols=("BTCUSDT", "ETHUSDT"),
+        config=PortfolioSafetyConfig(
+            max_concurrent_positions=5,
+            max_positions_per_correlation_group=2,
+        ),
+    )
+    assert result.allow_new_entries is True
+
+
 def test_daily_loss_guard_uses_stable_day_baseline_and_resets_next_day():
     state = PortfolioSafetyState()
     cfg = PortfolioSafetyConfig(max_daily_loss_pct=3.0)
