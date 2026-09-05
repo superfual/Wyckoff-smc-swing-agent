@@ -7,7 +7,7 @@ positions, risk decisions, checkpoints, or exchange state.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 try:
@@ -50,6 +50,7 @@ class PaperCycleReport:
     checkpoint_saved: bool
     equity: float
     realized_pnl: float
+    unrealized_pnl: float
     exposure_pct: float
     open_positions: int
     total_trades: int
@@ -125,6 +126,7 @@ def build_paper_cycle_report(result: RuntimeCycleResult, session: PaperSession) 
         checkpoint_saved=result.checkpoint_saved,
         equity=summary.equity,
         realized_pnl=summary.realized_pnl,
+        unrealized_pnl=summary.unrealized_pnl,
         exposure_pct=summary.exposure_pct,
         open_positions=summary.open_positions,
         total_trades=summary.total_trades,
@@ -139,7 +141,8 @@ def render_paper_cycle_report(report: PaperCycleReport) -> str:
         f"PAPER CYCLE {report.decision_time}",
         (
             f"Portfolio: equity={report.equity:.2f} | realized={report.realized_pnl:.2f} | "
-            f"exposure={report.exposure_pct:.2f}% | open={report.open_positions} | trades={report.total_trades}"
+            f"unrealized={report.unrealized_pnl:.2f} | exposure={report.exposure_pct:.2f}% | "
+            f"open={report.open_positions} | trades={report.total_trades}"
         ),
         (
             f"Cycle: processed={report.processed_symbols} | skipped={report.skipped_symbols} | "
