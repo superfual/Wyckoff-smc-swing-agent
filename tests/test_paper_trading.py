@@ -9,8 +9,8 @@ from market_data import Candle, MarketData
 from paper_trading import PaperPosition, PaperTradingConfig, create_paper_account, process_paper_snapshot
 
 
-def _market(price=100.0, low=99.0, high=101.0):
-    candles = [Candle(0, 100, high, low, price, 10)]
+def _market(price=100.0, low=99.0, high=101.0, open_price=100.0):
+    candles = [Candle(0, open_price, high, low, price, 10)]
     return MarketData("BTCUSDT", price, candles, candles, candles, candles)
 
 
@@ -29,24 +29,105 @@ def test_create_account_uses_virtual_equity():
     account = create_paper_account(PaperTradingConfig(initial_equity=5000))
     assert account.equity == 5000
     assert account.open_position is None
+    assert account.pending_entry_price is None
     assert account.unrealized_pnl == 0
 
 
-def test_enter_long_opens_virtual_position(monkeypatch):
+def test_enter_long_stages_pending_limit_not_same_candle_fill(monkeypatch):
     monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision("ENTER_LONG", True, 100, 95, 110, 1000))
     account = create_paper_account()
-    result = process_paper_snapshot(account, _market(), timestamp=1)
-    assert result.account.open_position is not None
-    assert result.account.open_position.direction == "LONG"
+
+    result = process_paper_snapshot(account, _market(price=100, low=90, high=110), timestamp=1)
+
+    assert account.open_position is None
+    assert account.pending_entry_price == 100
+    assert any(event.kind == "ORDER" for event in result.events)
+    assert not any(event.kind == "OPEN" for event in result.events)
+
+
+def test_pending_limit_fills_only_on_later_closed_candle(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision())
+    account = create_paper_account()
+    account.pending_entry_price = 100
+    account.pending_stop_price = 95
+    account.pending_target_price = 110
+    account.pending_size_quote = 1000
+    account.pending_created_timestamp = 1
+
+    result = process_paper_snapshot(account, _market(price=102, low=99, high=103), timestamp=2, config=PaperTradingConfig(slippage_bps_per_side=0))
+
+    assert account.open_position is not None
+    assert account.open_position.entry_price == 100
+    assert account.pending_entry_price is None
     assert any(event.kind == "OPEN" for event in result.events)
 
 
-def test_entry_fee_is_booked_immediately_and_position_is_marked(monkeypatch):
-    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision("ENTER_LONG", True, 100, 95, 110, 1000))
+def test_gap_above_buy_limit_does_not_fill_and_order_expires(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision())
+    cfg = PaperTradingConfig(entry_order_ttl_bars=2)
+    account = create_paper_account(cfg)
+    account.pending_entry_price = 100
+    account.pending_stop_price = 95
+    account.pending_target_price = 110
+    account.pending_size_quote = 1000
+    account.pending_created_timestamp = 1
+
+    first = process_paper_snapshot(account, _market(price=104, low=103, high=105, open_price=104), timestamp=2, config=cfg)
+    assert account.open_position is None
+    assert account.pending_entry_price == 100
+    assert not any(event.kind == "MISS" for event in first.events)
+
+    second = process_paper_snapshot(account, _market(price=106, low=105, high=107, open_price=106), timestamp=3, config=cfg)
+    assert account.open_position is None
+    assert account.pending_entry_price is None
+    assert any(event.kind == "MISS" for event in second.events)
+
+
+def test_gap_below_limit_uses_limit_price_conservatively(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision())
     account = create_paper_account()
+    account.pending_entry_price = 100
+    account.pending_stop_price = 90
+    account.pending_target_price = 120
+    account.pending_size_quote = 1000
+    account.pending_created_timestamp = 1
+
+    process_paper_snapshot(account, _market(price=97, low=96, high=99, open_price=97), timestamp=2, config=PaperTradingConfig(slippage_bps_per_side=0))
+
+    assert account.open_position is not None
+    assert account.open_position.entry_price == 100
+    assert account.unrealized_pnl == -30
+
+
+def test_pending_fill_candle_stop_is_conservative(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision())
+    cfg = PaperTradingConfig(fee_bps_per_side=0, slippage_bps_per_side=0, conservative_entry_same_bar_stop=True)
+    account = create_paper_account(cfg)
+    account.pending_entry_price = 100
+    account.pending_stop_price = 95
+    account.pending_target_price = 110
+    account.pending_size_quote = 1000
+    account.pending_created_timestamp = 1
+
+    result = process_paper_snapshot(account, _market(price=101, low=94, high=104), timestamp=2, config=cfg)
+
+    assert account.open_position is None
+    assert account.trades[-1].exit_reason == "STOP"
+    assert any(event.kind == "OPEN" for event in result.events)
+    assert any(event.kind == "CLOSE" for event in result.events)
+
+
+def test_entry_fee_is_booked_when_pending_order_fills(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision())
+    account = create_paper_account()
+    account.pending_entry_price = 100
+    account.pending_stop_price = 95
+    account.pending_target_price = 110
+    account.pending_size_quote = 1000
+    account.pending_created_timestamp = 1
     cfg = PaperTradingConfig(fee_bps_per_side=10, slippage_bps_per_side=0)
 
-    process_paper_snapshot(account, _market(price=100), timestamp=1, config=cfg)
+    process_paper_snapshot(account, _market(price=100, low=99, high=101), timestamp=2, config=cfg)
 
     assert account.open_position is not None
     assert account.open_position.entry_fee_quote == 1.0
@@ -89,12 +170,13 @@ def test_close_does_not_double_charge_entry_fee(monkeypatch):
     assert account.unrealized_pnl == 0
 
 
-def test_short_signal_never_opens_spot_paper_position(monkeypatch):
+def test_short_signal_never_opens_or_stages_spot_position(monkeypatch):
     monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision("ENTER_SHORT", True, 100, 105, 90, 1000))
     account = create_paper_account()
     result = process_paper_snapshot(account, _market(), timestamp=1)
     assert result.account.open_position is None
-    assert not any(event.kind == "OPEN" for event in result.events)
+    assert result.account.pending_entry_price is None
+    assert not any(event.kind in {"ORDER", "OPEN"} for event in result.events)
 
 
 def test_existing_position_closes_at_stop_before_new_decision(monkeypatch):
@@ -123,12 +205,13 @@ def test_duplicate_or_older_timestamp_is_rejected(monkeypatch):
     assert result.errors == ["NON_MONOTONIC_TIMESTAMP"]
 
 
-def test_cooldown_prevents_immediate_reentry_after_exit(monkeypatch):
+def test_cooldown_prevents_immediate_new_order_after_exit(monkeypatch):
     monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision("ENTER_LONG", True, 100, 95, 110, 1000))
     account = create_paper_account()
     account.open_position = PaperPosition("BTCUSDT", "LONG", 1, 100, 95, 110, 1000, 10, 1)
     result = process_paper_snapshot(account, _market(price=111, low=100, high=112), timestamp=2)
     assert result.account.open_position is None
+    assert result.account.pending_entry_price is None
     assert result.account.cooldown_bars_remaining == 1
     assert any(event.kind == "CLOSE" for event in result.events)
-    assert not any(event.kind == "OPEN" for event in result.events)
+    assert not any(event.kind == "ORDER" for event in result.events)
