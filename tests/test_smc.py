@@ -44,9 +44,9 @@ def make_bearish_fvg() -> list[Candle]:
 def make_bullish_ob_sequence() -> tuple[list[Candle], StructureEvent]:
     candles = [
         candle(0,100,101,99,100), candle(1,100,101,99.5,100.2), candle(2,100.2,101,99.8,100),
-        candle(3,100,101,97,98),  # last bearish origin candle
+        candle(3,100,101,97,98),
         candle(4,98,106,97.8,105), candle(5,105,109,104,108),
-        candle(6,108,110,106,109), candle(7,109,110,103.5,104.5),
+        candle(6,108,110,106,109), candle(7,109,110,98.5,104.5),
     ]
     event = StructureEvent("BOS","BULLISH",5,candles[5].timestamp,108,2,101,"CLOSE")
     return candles, event
@@ -55,7 +55,7 @@ def make_bullish_ob_sequence() -> tuple[list[Candle], StructureEvent]:
 def make_bearish_ob_sequence() -> tuple[list[Candle], StructureEvent]:
     candles = [
         candle(0,110,111,109,110), candle(1,110,110.5,109,109.8), candle(2,109.8,110,109,109.5),
-        candle(3,109.5,113,109,112),  # last bullish origin candle
+        candle(3,109.5,113,109,112),
         candle(4,112,112.2,104,105), candle(5,105,106,101,102),
         candle(6,102,105,100,101), candle(7,101,109.5,100,108),
     ]
