@@ -14,6 +14,8 @@ of already-open positions.
 V1.3 models fresh Spot entries as pending limit orders that can only fill on a
 later closed candle. This prevents using the signal candle's earlier high/low as
 post-decision fill evidence.
+V1.4 revalidates portfolio safety before pending orders may fill; stale orders are
+cancelled when portfolio context no longer permits new exposure.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ except ImportError:
     from orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from risk import RiskConfig
 
-PaperEventKind = Literal["DECISION", "ORDER", "OPEN", "CLOSE", "MISS", "BLOCK"]
+PaperEventKind = Literal["DECISION", "ORDER", "OPEN", "CLOSE", "MISS", "CANCEL", "BLOCK"]
 PaperExitReason = Literal["STOP", "TARGET"]
 PaperReferenceTimeframe = Literal["1d", "4h", "1h", "15m"]
 
@@ -214,10 +216,14 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
     return trade
 
 
+def _unique_blockers(blockers: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(str(item) for item in blockers if str(item)))
+
+
 def _apply_entry_blockers(decision: AgentDecision, blockers: Sequence[str]) -> None:
     if not blockers or decision.action not in {"ENTER_LONG", "ENTER_SHORT"}:
         return
-    unique = list(dict.fromkeys(str(item) for item in blockers if str(item)))
+    unique = _unique_blockers(blockers)
     if not unique:
         return
     execution = decision.execution
@@ -232,6 +238,23 @@ def _apply_entry_blockers(decision: AgentDecision, blockers: Sequence[str]) -> N
     decision.action = "BLOCKED"
     decision.reasons.extend(f"Portfolio safety: {item}." for item in unique)
     decision.interpretation = "Symbol-level setup passed, but portfolio-level safety blocks new exposure."
+
+
+def _cancel_pending_for_safety(account: PaperAccount, timestamp: int, blockers: Sequence[str], events: list[PaperEvent]) -> bool:
+    unique = _unique_blockers(blockers)
+    if account.pending_entry_price is None or not unique:
+        return False
+    cancelled = account.pending_entry_price
+    _clear_pending(account)
+    event = PaperEvent(
+        timestamp,
+        "CANCEL",
+        "ENTRY_CANCELLED_SAFETY",
+        f"Pending Spot buy limit at {cancelled:.8f} cancelled after portfolio safety revalidation: {', '.join(unique)}.",
+    )
+    events.append(event)
+    account.events.append(event)
+    return True
 
 
 def _try_fill_pending(account: PaperAccount, market: MarketData, timestamp: int, cfg: PaperTradingConfig, events: list[PaperEvent]) -> bool:
@@ -251,8 +274,6 @@ def _try_fill_pending(account: PaperAccount, market: MarketData, timestamp: int,
             _clear_pending(account)
             return False
 
-        # A buy limit never fills above its limit. If price gaps below it, using
-        # the limit itself is conservative versus assuming price improvement.
         entry = limit_price
         units = size_quote / entry
         entry_fee = size_quote * cfg.fee_bps_per_side / 10_000
@@ -275,8 +296,6 @@ def _try_fill_pending(account: PaperAccount, market: MarketData, timestamp: int,
         events.append(event)
         account.events.append(event)
 
-        # If the fill candle also trades through the stop, bar ordering is
-        # unknown. V1 fails conservatively by assuming the stop occurred after fill.
         if cfg.conservative_entry_same_bar_stop and candle.low <= stop:
             trade = _close_position(account, timestamp, stop, "STOP", cfg)
             close_event = PaperEvent(timestamp, "CLOSE", "STOP", f"Entry-fill candle also breached stop; conservative same-bar stop at {trade.exit_price:.8f}; net PnL {trade.net_pnl_quote:.2f}.")
@@ -340,6 +359,10 @@ def process_paper_snapshot(
                 account.events.append(event)
                 closed_this_step = True
 
+    # Pending orders must pass today's portfolio context again. Any active guard
+    # invalidates the old order; a future entry requires a fresh strategy decision.
+    _cancel_pending_for_safety(account, timestamp, entry_blockers, events)
+
     if account.open_position is None and account.pending_entry_price is not None:
         filled = _try_fill_pending(account, market, timestamp, cfg, events)
         if filled and account.open_position is None:
@@ -367,7 +390,7 @@ def process_paper_snapshot(
     pre_guard_action = decision.action
     _apply_entry_blockers(decision, entry_blockers)
     if decision.action == "BLOCKED" and pre_guard_action in {"ENTER_LONG", "ENTER_SHORT"}:
-        block_note = ", ".join(dict.fromkeys(str(item) for item in entry_blockers if str(item)))
+        block_note = ", ".join(_unique_blockers(entry_blockers))
         event = PaperEvent(timestamp, "BLOCK", "BLOCKED", f"Portfolio safety blocked new exposure: {block_note}.")
         events.append(event)
         account.events.append(event)
@@ -398,4 +421,4 @@ def process_paper_snapshot(
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Paper trading engine ready; virtual Spot positions only.")
+    print("Paper trading engine ready; virtual positions only.")
