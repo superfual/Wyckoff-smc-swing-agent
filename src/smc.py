@@ -1,15 +1,17 @@
 """
-Smart Money Concepts (SMC) Market Structure Engine
+Smart Money Concepts (SMC) Structure + Liquidity Engine
 Wyckoff + SMC Spot Swing Agent
 
-V1 focuses on deterministic market-structure primitives:
+Current deterministic primitives:
 - Swing High / Swing Low detection
 - Break of Structure (BOS)
 - Change of Character (CHoCH)
+- Equal High / Equal Low liquidity pools
+- Buy-side / Sell-side liquidity sweeps
 
-It intentionally does not infer institutional intent. The engine converts
-price structure into explicit, testable evidence for later liquidity,
-imbalance, order-block and confluence layers.
+The engine does not infer institutional intent. It converts observable price
+structure into explicit, testable evidence for later imbalance, order-block
+and Wyckoff + SMC confluence layers.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ except ImportError:  # Allows: python src/smc.py
 SwingKind = Literal["HIGH", "LOW"]
 StructureEventKind = Literal["BOS", "CHOCH"]
 Direction = Literal["BULLISH", "BEARISH"]
+LiquiditySide = Literal["BUY_SIDE", "SELL_SIDE"]
+LiquidityPoolKind = Literal["EQUAL_HIGHS", "EQUAL_LOWS"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,32 @@ class StructureEvent:
     confirmation: str
 
 
+@dataclass(frozen=True)
+class LiquidityPool:
+    kind: LiquidityPoolKind
+    side: LiquiditySide
+    level: float
+    tolerance_pct: float
+    swing_indices: tuple[int, ...]
+    first_index: int
+    last_index: int
+    touches: int
+
+
+@dataclass(frozen=True)
+class LiquiditySweep:
+    side: LiquiditySide
+    direction: Direction
+    index: int
+    timestamp: int
+    pool_level: float
+    extreme_price: float
+    close_price: float
+    penetration_pct: float
+    pool_kind: LiquidityPoolKind
+    pool_last_index: int
+
+
 @dataclass
 class SMCAnalysis:
     symbol: str
@@ -57,6 +87,8 @@ class SMCAnalysis:
     trend_state: str
     swings: list[SwingPoint]
     events: list[StructureEvent]
+    liquidity_pools: list[LiquidityPool]
+    liquidity_sweeps: list[LiquiditySweep]
     latest_swing_high: SwingPoint | None
     latest_swing_low: SwingPoint | None
     interpretation: str
@@ -83,11 +115,7 @@ def detect_swings(
     left: int = 2,
     right: int = 2,
 ) -> list[SwingPoint]:
-    """Detect confirmed pivot highs/lows using symmetric neighboring candles.
-
-    A swing is confirmed only after `right` candles have printed, which avoids
-    using future-unconfirmed pivots in downstream structure analysis.
-    """
+    """Detect confirmed pivot highs/lows using symmetric neighboring candles."""
 
     if left < 1 or right < 1:
         raise ValueError("left and right must both be >= 1")
@@ -182,13 +210,7 @@ def detect_structure_events(
     swings: list[SwingPoint],
     use_close_confirmation: bool = True,
 ) -> list[StructureEvent]:
-    """Detect BOS and CHoCH from confirmed swing breaks.
-
-    BOS continues the currently established structural direction.
-    CHoCH is the first confirmed break against that established direction.
-    Each swing level can be consumed only once, preventing duplicate events
-    from repeated closes beyond the same level.
-    """
+    """Detect BOS and CHoCH from confirmed swing breaks."""
 
     swings = _compress_same_kind_swings(swings)
     if len(swings) < 3:
@@ -228,8 +250,6 @@ def detect_structure_events(
             and ("LOW", last_low.index) not in consumed
         )
 
-        # Outside bars can technically break both sides. Ignore ambiguous dual
-        # breaks unless the close clearly resolves on one side of structure.
         if breaks_high and breaks_low:
             if candle.close > last_high.price:
                 breaks_low = False
@@ -277,6 +297,148 @@ def detect_structure_events(
     return events
 
 
+def detect_liquidity_pools(
+    swings: list[SwingPoint],
+    tolerance_pct: float = 0.25,
+    min_touches: int = 2,
+) -> list[LiquidityPool]:
+    """Group nearby confirmed swing highs/lows into liquidity pools.
+
+    `tolerance_pct` is the maximum percentage distance from the running pool
+    level. Equal highs map to buy-side liquidity; equal lows map to sell-side.
+    """
+
+    if tolerance_pct <= 0:
+        raise ValueError("tolerance_pct must be > 0")
+    if min_touches < 2:
+        raise ValueError("min_touches must be >= 2")
+
+    pools: list[LiquidityPool] = []
+
+    for kind in ("HIGH", "LOW"):
+        candidates = sorted(
+            (s for s in swings if s.kind == kind),
+            key=lambda s: s.index,
+        )
+        groups: list[list[SwingPoint]] = []
+
+        for swing in candidates:
+            matched_group: list[SwingPoint] | None = None
+            best_distance = float("inf")
+
+            for group in groups:
+                level = sum(item.price for item in group) / len(group)
+                distance_pct = abs(swing.price - level) / level * 100 if level else 0.0
+                if distance_pct <= tolerance_pct and distance_pct < best_distance:
+                    matched_group = group
+                    best_distance = distance_pct
+
+            if matched_group is None:
+                groups.append([swing])
+            else:
+                matched_group.append(swing)
+
+        for group in groups:
+            if len(group) < min_touches:
+                continue
+
+            level = sum(item.price for item in group) / len(group)
+            pools.append(
+                LiquidityPool(
+                    kind="EQUAL_HIGHS" if kind == "HIGH" else "EQUAL_LOWS",
+                    side="BUY_SIDE" if kind == "HIGH" else "SELL_SIDE",
+                    level=round(level, 8),
+                    tolerance_pct=tolerance_pct,
+                    swing_indices=tuple(item.index for item in group),
+                    first_index=group[0].index,
+                    last_index=group[-1].index,
+                    touches=len(group),
+                )
+            )
+
+    return sorted(pools, key=lambda pool: (pool.last_index, pool.side))
+
+
+def detect_liquidity_sweeps(
+    candles: list[Candle],
+    pools: list[LiquidityPool],
+    min_penetration_pct: float = 0.01,
+) -> list[LiquiditySweep]:
+    """Detect wick-through + close-reclaim sweeps of established pools.
+
+    A buy-side sweep trades above equal highs but closes back at/below the pool.
+    A sell-side sweep trades below equal lows but closes back at/above the pool.
+    A close that accepts beyond the pool is deliberately not classified as a
+    sweep; downstream structure logic can treat it as a potential break instead.
+    """
+
+    if min_penetration_pct < 0:
+        raise ValueError("min_penetration_pct must be >= 0")
+
+    sweeps: list[LiquiditySweep] = []
+    consumed: set[tuple[LiquiditySide, int]] = set()
+
+    for pool in pools:
+        if pool.level <= 0:
+            continue
+
+        for index in range(pool.last_index + 1, len(candles)):
+            candle = candles[index]
+            key = (pool.side, pool.last_index)
+            if key in consumed:
+                break
+
+            if pool.side == "BUY_SIDE":
+                penetration_pct = (candle.high - pool.level) / pool.level * 100
+                swept = (
+                    candle.high > pool.level
+                    and penetration_pct >= min_penetration_pct
+                    and candle.close <= pool.level
+                )
+                if swept:
+                    sweeps.append(
+                        LiquiditySweep(
+                            side="BUY_SIDE",
+                            direction="BEARISH",
+                            index=index,
+                            timestamp=candle.timestamp,
+                            pool_level=pool.level,
+                            extreme_price=candle.high,
+                            close_price=candle.close,
+                            penetration_pct=round(penetration_pct, 4),
+                            pool_kind=pool.kind,
+                            pool_last_index=pool.last_index,
+                        )
+                    )
+                    consumed.add(key)
+
+            else:
+                penetration_pct = (pool.level - candle.low) / pool.level * 100
+                swept = (
+                    candle.low < pool.level
+                    and penetration_pct >= min_penetration_pct
+                    and candle.close >= pool.level
+                )
+                if swept:
+                    sweeps.append(
+                        LiquiditySweep(
+                            side="SELL_SIDE",
+                            direction="BULLISH",
+                            index=index,
+                            timestamp=candle.timestamp,
+                            pool_level=pool.level,
+                            extreme_price=candle.low,
+                            close_price=candle.close,
+                            penetration_pct=round(penetration_pct, 4),
+                            pool_kind=pool.kind,
+                            pool_last_index=pool.last_index,
+                        )
+                    )
+                    consumed.add(key)
+
+    return sorted(sweeps, key=lambda sweep: sweep.index)
+
+
 def _analysis_bias(events: list[StructureEvent], swing_state: str) -> tuple[str, str]:
     if events:
         latest = events[-1]
@@ -296,8 +458,9 @@ def analyze_smc(
     swing_left: int = 2,
     swing_right: int = 2,
     use_close_confirmation: bool = True,
+    liquidity_tolerance_pct: float = 0.25,
 ) -> SMCAnalysis:
-    """Analyze SMC market structure on one selected timeframe."""
+    """Analyze SMC structure and liquidity on one selected timeframe."""
 
     timeframe = timeframe.lower()
     if timeframe not in {"1d", "4h", "1h", "15m"}:
@@ -316,9 +479,11 @@ def analyze_smc(
             trend_state="INVALID_DATA",
             swings=[],
             events=[],
+            liquidity_pools=[],
+            liquidity_sweeps=[],
             latest_swing_high=None,
             latest_swing_low=None,
-            interpretation="Required market structure data is unavailable.",
+            interpretation="Required SMC data is unavailable.",
             errors=errors,
         )
 
@@ -332,12 +497,29 @@ def analyze_smc(
         swings,
         use_close_confirmation=use_close_confirmation,
     )
+    liquidity_pools = detect_liquidity_pools(
+        swings,
+        tolerance_pct=liquidity_tolerance_pct,
+    )
+    liquidity_sweeps = detect_liquidity_sweeps(candles, liquidity_pools)
 
     latest_high = next((s for s in reversed(swings) if s.kind == "HIGH"), None)
     latest_low = next((s for s in reversed(swings) if s.kind == "LOW"), None)
     bias, trend_state = _analysis_bias(events, swing_state)
 
-    if events:
+    if liquidity_sweeps:
+        latest_sweep = liquidity_sweeps[-1]
+        interpretation = (
+            f"{latest_sweep.side.replace('_', '-').title()} liquidity sweep detected "
+            f"with {latest_sweep.direction.lower()} rejection."
+        )
+        if events:
+            latest_event = events[-1]
+            interpretation += (
+                f" Latest structure event: {latest_event.direction.title()} "
+                f"{latest_event.kind}."
+            )
+    elif events:
         latest = events[-1]
         if latest.kind == "CHOCH":
             interpretation = (
@@ -363,6 +545,8 @@ def analyze_smc(
         trend_state=trend_state,
         swings=swings,
         events=events,
+        liquidity_pools=liquidity_pools,
+        liquidity_sweeps=liquidity_sweeps,
         latest_swing_high=latest_high,
         latest_swing_low=latest_low,
         interpretation=interpretation,
@@ -372,4 +556,4 @@ def analyze_smc(
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("SMC market structure engine ready.")
+    print("SMC structure + liquidity engine ready.")
