@@ -16,17 +16,25 @@ from typing import Literal
 
 try:
     from .execution import ExecutionConfig
-    from .market_data import MarketData
+    from .market_data import Candle, MarketData
     from .orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from .risk import RiskConfig
 except ImportError:
     from execution import ExecutionConfig
-    from market_data import MarketData
+    from market_data import Candle, MarketData
     from orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from risk import RiskConfig
 
 PaperEventKind = Literal["DECISION", "OPEN", "CLOSE"]
 PaperExitReason = Literal["STOP", "TARGET"]
+PaperReferenceTimeframe = Literal["1d", "4h", "1h", "15m"]
+
+_TIMEFRAME_FIELD = {
+    "1d": "daily",
+    "4h": "four_hour",
+    "1h": "one_hour",
+    "15m": "fifteen_minute",
+}
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,7 @@ class PaperTradingConfig:
     slippage_bps_per_side: float = 2.0
     cooldown_bars_after_exit: int = 1
     conservative_same_bar: bool = True
+    reference_timeframe: PaperReferenceTimeframe = "1h"
 
 
 @dataclass
@@ -121,6 +130,14 @@ def _exit_fill(price: float, slippage_bps: float) -> float:
     return price * (1 - slippage_bps / 10_000)
 
 
+def _reference_candle(market: MarketData, timeframe: str) -> Candle | None:
+    field = _TIMEFRAME_FIELD.get(timeframe)
+    if field is None:
+        return None
+    candles = getattr(market, field)
+    return candles[-1] if candles else None
+
+
 def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, reason: PaperExitReason, cfg: PaperTradingConfig) -> PaperTrade:
     position = account.open_position
     assert position is not None
@@ -178,13 +195,15 @@ def process_paper_snapshot(
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_CURRENT_PRICE"])
     if cfg.fee_bps_per_side < 0 or cfg.slippage_bps_per_side < 0 or cfg.cooldown_bars_after_exit < 0:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_PAPER_CONFIG"])
+    if cfg.reference_timeframe not in _TIMEFRAME_FIELD:
+        return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_REFERENCE_TIMEFRAME"])
     if current_portfolio_exposure_pct is not None and not 0 <= current_portfolio_exposure_pct <= 100:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_PORTFOLIO_EXPOSURE"])
 
     closed_this_step = False
     position = account.open_position
     if position is not None:
-        candle = market.one_hour[-1] if market.one_hour else None
+        candle = _reference_candle(market, cfg.reference_timeframe)
         if candle is not None:
             stop_hit = candle.low <= position.stop_price
             target_hit = candle.high >= position.target_price
