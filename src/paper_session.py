@@ -7,6 +7,7 @@ and one shared portfolio exposure budget. Each market snapshot is processed
 sequentially, so a newly opened position immediately consumes exposure before
 the next symbol is evaluated.
 
+Session equity is mark-to-market: initial equity + realized PnL + unrealized PnL.
 No exchange orders are sent.
 """
 
@@ -56,6 +57,7 @@ class SessionEquityPoint:
     equity: float
     realized_pnl: float
     exposure_pct: float
+    unrealized_pnl: float = 0.0
 
 
 @dataclass
@@ -80,6 +82,7 @@ class PaperSession:
     action_counts: dict[str, int] = field(default_factory=dict)
     decisions: int = 0
     errors: list[str] = field(default_factory=list)
+    unrealized_pnl: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -104,6 +107,7 @@ class PaperSessionSummary:
     max_drawdown_pct: float
     symbols_seen: int
     errors: list[str]
+    unrealized_pnl: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -114,7 +118,7 @@ def create_paper_session(config: PaperSessionConfig | None = None) -> PaperSessi
     if cfg.initial_equity <= 0:
         raise ValueError("initial_equity must be > 0")
     session = PaperSession(initial_equity=cfg.initial_equity, equity=cfg.initial_equity)
-    session.equity_curve.append(SessionEquityPoint(0, cfg.initial_equity, 0.0, 0.0))
+    session.equity_curve.append(SessionEquityPoint(0, cfg.initial_equity, 0.0, 0.0, 0.0))
     return session
 
 
@@ -136,6 +140,12 @@ def _exposure_pct(session: PaperSession) -> float:
 def _sync_equity(session: PaperSession) -> None:
     for account in session.accounts.values():
         account.equity = session.equity
+
+
+def _revalue_session(session: PaperSession) -> None:
+    session.unrealized_pnl = sum(account.unrealized_pnl for account in session.accounts.values())
+    session.equity = session.initial_equity + session.realized_pnl + session.unrealized_pnl
+    _sync_equity(session)
 
 
 def process_session_snapshot(
@@ -179,8 +189,9 @@ def process_session_snapshot(
     realized_delta = account.realized_pnl - before_realized
     if realized_delta:
         session.realized_pnl += realized_delta
-        session.equity = session.initial_equity + session.realized_pnl
-        _sync_equity(session)
+
+    # Always refresh MTM equity, even if no trade was opened/closed this step.
+    _revalue_session(session)
 
     if result.decision is not None:
         session.decisions += 1
@@ -202,6 +213,7 @@ def process_session_snapshot(
         equity=round(session.equity, 8),
         realized_pnl=round(session.realized_pnl, 8),
         exposure_pct=round(exposure_after, 4),
+        unrealized_pnl=round(session.unrealized_pnl, 8),
     ))
     return result
 
@@ -226,7 +238,7 @@ def summarize_paper_session(session: PaperSession) -> PaperSessionSummary:
     gross_profit = sum(max(trade.net_pnl_quote, 0.0) for trade in trades)
     gross_loss = abs(sum(min(trade.net_pnl_quote, 0.0) for trade in trades))
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (inf if gross_profit > 0 else None)
-    return_pct = session.realized_pnl / session.initial_equity * 100 if session.initial_equity else 0.0
+    return_pct = (session.equity - session.initial_equity) / session.initial_equity * 100 if session.initial_equity else 0.0
 
     return PaperSessionSummary(
         initial_equity=round(session.initial_equity, 8),
@@ -246,6 +258,7 @@ def summarize_paper_session(session: PaperSession) -> PaperSessionSummary:
         max_drawdown_pct=round(_max_drawdown_pct(session.equity_curve), 4),
         symbols_seen=len(session.accounts),
         errors=list(session.errors),
+        unrealized_pnl=round(session.unrealized_pnl, 8),
     )
 
 
