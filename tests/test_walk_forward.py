@@ -20,7 +20,7 @@ def _bt(expectancy, trades=6, drawdown=5.0):
 
 
 def _candles(count):
-    return [Candle(i * 3_600_000, 100, 101, 99, 100, 10, 5, 5) for i in range(count)]
+    return [Candle(i * 3_600_000, 100, 101, 99, 100, 10) for i in range(count)]
 
 
 def _market(count=30):
