@@ -5,6 +5,9 @@ Wyckoff + SMC Spot Swing Agent
 Coordinates an external normalized market-data provider with the closed-candle
 paper runner, persistent portfolio guards, and versioned checkpoint persistence.
 
+Transient provider/cycle-input failures are returned per cycle and do not poison
+the runtime. Recovery/checkpoint durability failures remain sticky and fail closed.
+
 This module performs no exchange authentication and sends no orders.
 """
 
@@ -38,8 +41,7 @@ except ImportError:
 
 
 class MarketDataProvider(Protocol):
-    def fetch_markets(self, symbols: Sequence[str], *, decision_time: int) -> list[MarketData]:
-        ...
+    def fetch_markets(self, symbols: Sequence[str], *, decision_time: int) -> list[MarketData]: ...
 
 
 @dataclass(frozen=True)
@@ -94,15 +96,9 @@ def _normalize_symbols(symbols: Sequence[str | WatchlistSymbol]) -> tuple[str, .
     return tuple(normalized)
 
 
-def create_paper_runtime(
-    *,
-    symbols: Sequence[str | WatchlistSymbol] | None = None,
-    runtime_config: PaperRuntimeConfig | None = None,
-    session_config: PaperSessionConfig | None = None,
-) -> PaperRuntime:
+def create_paper_runtime(*, symbols: Sequence[str | WatchlistSymbol] | None = None, runtime_config: PaperRuntimeConfig | None = None, session_config: PaperSessionConfig | None = None) -> PaperRuntime:
     cfg = runtime_config or PaperRuntimeConfig()
     runtime_symbols = _normalize_symbols(symbols if symbols is not None else load_watchlist())
-
     if cfg.auto_recover:
         recovery = load_checkpoint(cfg.checkpoint_path)
         if recovery.recovered:
@@ -110,14 +106,9 @@ def create_paper_runtime(
             return PaperRuntime(recovery.session, recovery.runner_state, runtime_symbols, cfg.checkpoint_path, True, [])
         if recovery.errors != ["CHECKPOINT_NOT_FOUND"]:
             return PaperRuntime(
-                create_paper_session(session_config),
-                PaperRunnerState(),
-                runtime_symbols,
-                cfg.checkpoint_path,
-                False,
+                create_paper_session(session_config), PaperRunnerState(), runtime_symbols, cfg.checkpoint_path, False,
                 [f"RECOVERY_FAILED:{error}" for error in recovery.errors],
             )
-
     return PaperRuntime(create_paper_session(session_config), PaperRunnerState(), runtime_symbols, cfg.checkpoint_path)
 
 
@@ -137,9 +128,9 @@ def run_runtime_cycle(
     cfg = runtime_config or PaperRuntimeConfig(checkpoint_path=runtime.checkpoint_path)
     errors: list[str] = []
 
+    # Only durability/recovery errors are sticky. Provider failures are retryable.
     if runtime.errors:
-        errors.extend(runtime.errors)
-        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, errors)
+        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, list(runtime.errors))
     if decision_time < 0:
         return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, ["INVALID_DECISION_TIME"])
 
@@ -147,13 +138,10 @@ def run_runtime_cycle(
         markets = provider.fetch_markets(runtime.symbols, decision_time=decision_time)
     except Exception as exc:
         error = f"MARKET_DATA_PROVIDER_ERROR:{type(exc).__name__}"
-        runtime.errors.append(error)
         return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, [error])
 
     if not isinstance(markets, list) or any(not isinstance(item, MarketData) for item in markets):
-        error = "INVALID_PROVIDER_RESULT"
-        runtime.errors.append(error)
-        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, [error])
+        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, ["INVALID_PROVIDER_RESULT"])
 
     provider_symbols = [market.symbol.upper() for market in markets]
     expected = set(runtime.symbols)
@@ -164,7 +152,6 @@ def run_runtime_cycle(
     if missing:
         errors.append("MISSING_PROVIDER_SYMBOLS:" + ",".join(missing))
     if unexpected or (missing and cfg.require_all_symbols):
-        runtime.errors.extend(errors)
         return RuntimeCycleResult(decision_time, provider_symbols, missing, None, False, errors)
 
     cycle = run_paper_cycle(
@@ -197,4 +184,4 @@ def run_runtime_cycle(
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Paper runtime boundary ready; external MarketDataProvider required.")
+    print("Paper runtime V2 ready; transient provider failures are retryable.")
