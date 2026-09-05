@@ -2,10 +2,8 @@
 Binance MCP Paper Host Harness
 Wyckoff + SMC Spot Swing Agent
 
-Small host-facing composition layer that wires a concrete MCP tool-call function
-into the read-only Binance MCP bridge, Binance market-data provider, and
-PaperRuntime. This is intentionally paper-only: it contains no exchange order,
-account, transfer, or credential operations.
+Composes a read-only Binance MCP market-data stack with PaperRuntime. The host
+also exposes a persistent portfolio kill switch for paper entries only.
 """
 
 from __future__ import annotations
@@ -17,16 +15,11 @@ try:
     from .binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from .binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
     from .paper_report import PaperCycleReport, build_paper_cycle_report
-    from .paper_runtime import (
-        PaperRuntime,
-        PaperRuntimeConfig,
-        RuntimeCycleResult,
-        create_paper_runtime,
-        run_runtime_cycle,
-    )
+    from .paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
     from .paper_runner import PaperRunnerConfig
     from .paper_session import PaperSessionConfig
     from .paper_trading import PaperTradingConfig
+    from .portfolio_safety import PortfolioSafetyConfig, set_kill_switch
     from .orchestrator import AgentConfig
     from .risk import RiskConfig
     from .execution import ExecutionConfig
@@ -34,27 +27,19 @@ except ImportError:
     from binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
     from paper_report import PaperCycleReport, build_paper_cycle_report
-    from paper_runtime import (
-        PaperRuntime,
-        PaperRuntimeConfig,
-        RuntimeCycleResult,
-        create_paper_runtime,
-        run_runtime_cycle,
-    )
+    from paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
     from paper_runner import PaperRunnerConfig
     from paper_session import PaperSessionConfig
     from paper_trading import PaperTradingConfig
+    from portfolio_safety import PortfolioSafetyConfig, set_kill_switch
     from orchestrator import AgentConfig
     from risk import RiskConfig
     from execution import ExecutionConfig
-
 
 ToolCall = Callable[[str, dict[str, Any]], Any]
 
 
 class CallableMCPInvoker:
-    """Adapts a host callable to the MCPToolInvoker protocol."""
-
     def __init__(self, tool_call: ToolCall) -> None:
         if not callable(tool_call):
             raise TypeError("tool_call must be callable")
@@ -71,6 +56,7 @@ class BinancePaperHostConfig:
     adapter: BinanceAdapterConfig = BinanceAdapterConfig()
     runner: PaperRunnerConfig = PaperRunnerConfig()
     paper: PaperTradingConfig = PaperTradingConfig()
+    portfolio_safety: PortfolioSafetyConfig = PortfolioSafetyConfig()
     agent: AgentConfig = AgentConfig()
     risk: RiskConfig = RiskConfig()
     execution: ExecutionConfig = ExecutionConfig()
@@ -96,25 +82,20 @@ def create_binance_paper_host(
     symbols: Sequence[str] | None = None,
     config: BinancePaperHostConfig | None = None,
 ) -> BinancePaperHost:
-    """Compose the paper-only Binance MCP stack for one host process."""
     cfg = config or BinancePaperHostConfig()
     invoker = CallableMCPInvoker(tool_call)
     bridge = BinanceMCPClientBridge(invoker, cfg.bridge)
     provider = BinanceMarketDataProvider(bridge, cfg.adapter)
-    runtime = create_paper_runtime(
-        symbols=symbols,
-        runtime_config=cfg.runtime,
-        session_config=cfg.session,
-    )
+    runtime = create_paper_runtime(symbols=symbols, runtime_config=cfg.runtime, session_config=cfg.session)
     return BinancePaperHost(runtime=runtime, provider=provider, config=cfg)
 
 
-def run_binance_paper_cycle(
-    host: BinancePaperHost,
-    *,
-    decision_time: int,
-) -> RuntimeCycleResult:
-    """Run exactly one paper cycle using the composed read-only Binance stack."""
+def set_binance_paper_kill_switch(host: BinancePaperHost, active: bool) -> None:
+    """Persistently block/unblock new paper entries without force-closing positions."""
+    set_kill_switch(host.runtime.session.portfolio_safety, active)
+
+
+def run_binance_paper_cycle(host: BinancePaperHost, *, decision_time: int) -> RuntimeCycleResult:
     cfg = host.config
     return run_runtime_cycle(
         host.runtime,
@@ -126,15 +107,11 @@ def run_binance_paper_cycle(
         agent_config=cfg.agent,
         risk_config=cfg.risk,
         execution_config=cfg.execution,
+        portfolio_safety_config=cfg.portfolio_safety,
     )
 
 
-def run_binance_paper_cycle_with_report(
-    host: BinancePaperHost,
-    *,
-    decision_time: int,
-) -> BinancePaperCycleOutput:
-    """Run one paper cycle and return a human/operator-facing decision snapshot."""
+def run_binance_paper_cycle_with_report(host: BinancePaperHost, *, decision_time: int) -> BinancePaperCycleOutput:
     result = run_binance_paper_cycle(host, decision_time=decision_time)
     report = build_paper_cycle_report(result, host.runtime.session)
     return BinancePaperCycleOutput(result=result, report=report)
