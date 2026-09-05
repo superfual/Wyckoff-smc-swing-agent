@@ -1,6 +1,6 @@
 # 🧠 Wyckoff + SMC Swing Agent
 
-> An AI-powered swing trading agent built with Binance Agent OS that combines Wyckoff market-cycle analysis with Smart Money Concepts (SMC) to identify structured swing trading opportunities.
+> An autonomous AI swing-trading agent built with Binance Agent OS that scans Binance Spot markets, discovers potential Wyckoff opportunities, monitors promising candidates, and uses Smart Money Concepts (SMC) to confirm actionable swing setups.
 
 **Binance Agent OS Mini Hackathon — Track A: Build an AI Agent**
 
@@ -8,54 +8,131 @@
 
 ## 🎯 Problem
 
-Crypto traders have access to enormous amounts of market data, but turning that data into a consistent trading decision is still highly manual.
+Crypto traders have access to hundreds of tradable markets and enormous amounts of market data, but finding the right swing opportunity at the right time is still highly manual.
 
-A swing trader may need to answer several questions before taking a position:
+A trader must repeatedly scan charts and ask:
 
-- Is the market accumulating or distributing?
-- Where is liquidity concentrated?
-- Has liquidity been swept?
-- Has market structure shifted?
-- Is there a valid BOS or CHoCH?
-- Where is the optimal entry?
-- Where should the setup be invalidated?
-- Is the risk/reward worth taking?
+- Which coins are entering Accumulation?
+- Which coins may be transitioning into Markup?
+- Is a Spring or liquidity sweep developing?
+- Has market structure shifted with CHoCH or BOS?
+- Which candidates deserve active monitoring?
+- Is there a valid entry with acceptable risk/reward?
+- Is an existing position entering Distribution?
+- When should a position be reduced or exited?
 
-Wyckoff and Smart Money Concepts can help answer these questions, but combining them consistently across multiple timeframes requires significant manual analysis.
+Wyckoff and Smart Money Concepts can help answer these questions, but manually applying them across many Binance Spot markets and multiple timeframes is difficult to scale.
+
+The challenge is not simply analyzing one chart.
+
+**The challenge is continuously discovering the right charts at the right time.**
 
 ---
 
 ## 💡 Solution
 
-**Wyckoff + SMC Swing Agent** is an AI agent designed to transform Binance market data into a structured swing-trading decision workflow.
+**Wyckoff + SMC Swing Agent** is designed as an autonomous market-discovery and swing-trading agent.
 
-Instead of simply asking:
+Instead of waiting for the trader to manually inspect every coin, the agent can scan eligible Binance Spot markets, identify promising Wyckoff structures, place candidates into a dynamic watchlist, and monitor them for SMC confirmation.
 
-> “Is BTC bullish or bearish?”
+The core workflow is:
 
-the agent follows a multi-stage reasoning process:
-
-**Market Data → Wyckoff → SMC → Setup → Risk → Decision**
+**Binance Spot → Scan → Filter → Wyckoff Screen → Watch → SMC Confirm → Risk → Signal**
 
 The goal is not to predict every market move.
 
-The goal is to identify selective, high-quality swing setups and return one of three decisions:
+The goal is to discover selective, high-quality swing opportunities and notify the trader when market structure becomes actionable.
 
+The agent can return states such as:
+
+- 🔵 **WATCH**
 - 🟢 **TRADE READY**
-- 🟡 **WAIT**
+- 🟠 **EXIT READY**
 - 🔴 **NO TRADE**
+- ⚫ **INVALIDATED**
+
+---
+
+## 🤖 Agent Operating Modes
+
+The agent supports three operating modes.
+
+### 🔎 DISCOVER
+
+Autonomously scan eligible Binance Spot markets to discover potential swing opportunities.
+
+The agent searches for structures such as:
+
+- Potential Accumulation
+- Potential Distribution
+- Spring
+- Sign of Strength
+- UTAD
+- Sign of Weakness
+- Early Markup
+- Early Markdown
+
+Promising candidates are moved into the dynamic watchlist.
+
+### 👁️ WATCH
+
+Continuously monitor candidates that are structurally interesting but not yet ready to trade.
+
+The agent watches for:
+
+- Liquidity Sweep
+- CHoCH
+- BOS
+- Displacement
+- Order Block interaction
+- Fair Value Gap interaction
+- Setup confirmation
+- Setup invalidation
+
+A candidate can transition from:
+
+**WATCH → TRADE READY**
+
+or:
+
+**WATCH → INVALIDATED**
+
+### 🎯 ANALYZE
+
+Perform deep analysis on a specific Binance Spot symbol requested by the user.
+
+For example:
+
+```text
+Analyze UNIUSDT for a swing setup.
+```
+
+This allows the agent to support both autonomous market discovery and on-demand analysis.
 
 ---
 
 ## 🧠 What the Agent Does
 
-The agent is designed around six core capabilities:
+The agent is designed around eight core capabilities.
 
-### 1. Market Data
+### 1. Binance Spot Universe
 
-Retrieve the market information required for analysis.
+Identify eligible Binance Spot markets that can be considered for swing analysis.
 
-### 2. Wyckoff Analysis
+### 2. Market Scanner
+
+Scan the market for structurally interesting candidates instead of performing expensive deep analysis on every symbol.
+
+### 3. Pre-Filter
+
+Remove markets that do not meet basic requirements such as:
+
+- Tradability
+- Sufficient liquidity
+- Sufficient market history
+- Suitable market structure
+
+### 4. Wyckoff Screening
 
 Identify potential market-cycle conditions such as:
 
@@ -70,9 +147,22 @@ Identify potential market-cycle conditions such as:
 - Sign of Weakness (SOW)
 - Last Point of Supply (LPSY)
 
-### 3. Smart Money Concepts
+### 5. Dynamic Watchlist
 
-Analyze price structure and liquidity using concepts such as:
+Automatically track promising candidates.
+
+The watchlist is not limited to a manually selected list of coins.
+
+Candidates may be:
+
+- Added when an interesting structure develops
+- Kept under observation while confirmation is incomplete
+- Promoted when a valid setup appears
+- Removed when the thesis is invalidated
+
+### 6. Smart Money Concepts Confirmation
+
+Analyze market structure and liquidity using:
 
 - Swing High / Swing Low
 - Liquidity
@@ -81,14 +171,11 @@ Analyze price structure and liquidity using concepts such as:
 - Change of Character (CHoCH)
 - Order Block (OB)
 - Fair Value Gap (FVG)
+- Displacement
 
-### 4. Setup Detection
+### 7. Risk Assessment
 
-Combine Wyckoff context, SMC confirmation, and multi-timeframe structure to determine whether a valid swing setup exists.
-
-### 5. Risk Assessment
-
-Evaluate:
+For confirmed setups, evaluate:
 
 - Entry zone
 - Invalidation
@@ -96,50 +183,108 @@ Evaluate:
 - Take Profit
 - Risk/Reward
 
-### 6. Decision & Action
+### 8. Signal & Position Monitoring
 
-Return a structured decision and prepare an action only when the setup passes the required checks.
+Generate structured signals and continue monitoring market structure after entry.
+
+Possible outputs include:
+
+- WATCH
+- TRADE READY
+- EXIT READY
+- NO TRADE
+- INVALIDATED
 
 ---
 
 ## 🔄 Agent Workflow
 
 ```text
-PHASE 0 — CONFIGURATION
-          ↓
-PHASE 1 — MARKET SCAN
-          ↓
-PHASE 2 — WYCKOFF ANALYSIS
-          ↓
-PHASE 3 — SMC CONFIRMATION
-          ↓
-PHASE 4 — SETUP DETECTION
-          ↓
-PHASE 5 — RISK CHECK
-          ↓
-PHASE 6 — DECISION
-          ↓
-     ┌────┼────┐
-     ↓    ↓    ↓
-   READY WAIT NO TRADE
-     ↓
-HUMAN CONFIRMATION
-     ↓
-BINANCE ACTION
+                 BINANCE SPOT
+                      │
+                      ↓
+              MARKET UNIVERSE
+                      │
+                      ↓
+                MARKET SCAN
+                      │
+                      ↓
+                 PRE-FILTER
+                      │
+                      ↓
+              WYCKOFF SCREEN
+                      │
+              ┌───────┴───────┐
+              ↓               ↓
+           REJECT         CANDIDATE
+                              │
+                              ↓
+                     DYNAMIC WATCHLIST
+                              │
+                              ↓
+                     DEEP WYCKOFF + SMC
+                              │
+                              ↓
+                      SETUP CONFIRMATION
+                              │
+                              ↓
+                         RISK CHECK
+                              │
+                   ┌──────────┼──────────┐
+                   ↓          ↓          ↓
+                 WATCH   TRADE READY  NO TRADE
+                              │
+                              ↓
+                     HUMAN CONFIRMATION
+                              │
+                              ↓
+                       BINANCE ACTION
+                              │
+                              ↓
+                     POSITION MONITORING
+                              │
+                              ↓
+                      DISTRIBUTION /
+                       EXIT ANALYSIS
+                              │
+                              ↓
+                         EXIT READY
 ```
 
-The agent does not need to force every market through the entire workflow.
+The agent does not force every market through the entire deep-analysis workflow.
 
-Each phase determines what should happen next.
+Each stage determines what should happen next.
 
-For example:
+This creates a funnel:
 
 ```text
-Accumulation detected
+Many Binance Spot Markets
+          ↓
+     Pre-Filtered Markets
+          ↓
+   Wyckoff Candidates
+          ↓
+    Dynamic Watchlist
+          ↓
+  Confirmed SMC Setups
+          ↓
+     Trade Signals
+```
+
+This allows the agent to focus computational and reasoning resources on the markets that matter most.
+
+---
+
+## 📈 Example — Finding a Long Setup
+
+```text
+Binance Spot Scan
         ↓
-Check SMC confirmation
+Potential Accumulation detected
         ↓
-Liquidity Sweep detected
+Candidate added to Watchlist
+        ↓
+Spring / Liquidity Sweep detected
         ↓
 Bullish CHoCH
         ↓
@@ -147,18 +292,66 @@ Bullish BOS
         ↓
 Valid Entry Zone
         ↓
-Risk Check passed
+Risk/Reward Check
         ↓
-TRADE READY
+TRADE READY 🔔
 ```
 
-If confirmation is missing:
+If confirmation is incomplete:
 
 ```text
-Setup incomplete
-      ↓
-     WAIT
+Potential Accumulation
+        ↓
+Spring detected
+        ↓
+No bullish BOS yet
+        ↓
+WATCH 👁️
+        ↓
+Re-evaluate later
 ```
+
+If the structure fails:
+
+```text
+Candidate
+    ↓
+Structure Invalidated
+    ↓
+INVALIDATED
+    ↓
+Remove from Watchlist
+```
+
+---
+
+## 📉 Position & Exit Logic
+
+The agent is not designed only to find entries.
+
+The longer-term objective is to follow the market cycle:
+
+```text
+ACCUMULATION
+     ↓
+TRADE READY
+     ↓
+   ENTRY
+     ↓
+  MARKUP
+     ↓
+   HOLD
+     ↓
+POTENTIAL DISTRIBUTION
+     ↓
+UTAD / LIQUIDITY SWEEP
+     ↓
+BEARISH CHoCH / BOS
+     ↓
+EXIT READY
+```
+
+This allows the agent to reason about the complete swing lifecycle rather than producing isolated buy signals.
 
 ---
 
@@ -166,24 +359,29 @@ Setup incomplete
 
 This project is being developed for **Track A of the Binance Agent OS Mini Hackathon**.
 
-Binance Agent OS provides the infrastructure and tools that allow the AI agent to interact with Binance capabilities.
+Binance Agent OS provides the infrastructure and capabilities that allow the AI agent to interact with the Binance ecosystem.
 
-The project uses this infrastructure to connect AI reasoning with real market context.
+The architecture separates AI reasoning from Binance capabilities:
 
 ```text
-          WYCKOFF + SMC AGENT
-                   │
-                   ↓
-            Decision Engine
-                   │
-                   ↓
-          Binance Agent OS
-                   │
-                   ↓
-          Binance Capabilities
+       WYCKOFF + SMC SWING AGENT
+                  │
+                  ↓
+        Discovery & Reasoning
+                  │
+                  ↓
+          Decision Engine
+                  │
+                  ↓
+         Binance Agent OS
+                  │
+                  ↓
+        Binance Capabilities
 ```
 
-The AI agent is responsible for deciding **what should happen next**, while Binance Agent OS provides the capabilities required to interact with the Binance ecosystem.
+The AI agent decides **what should happen next**.
+
+Binance Agent OS provides the market and trading capabilities required to act on those decisions.
 
 ---
 
@@ -191,21 +389,29 @@ The AI agent is responsible for deciding **what should happen next**, while Bina
 
 The initial version uses human confirmation before trade execution.
 
-Even when the agent identifies a valid setup:
+The agent may autonomously:
+
+- Scan markets
+- Discover candidates
+- Maintain a watchlist
+- Analyze setups
+- Generate signals
+
+But a trading action requires explicit user confirmation.
 
 ```text
 TRADE READY
      ↓
-WAIT FOR CONFIRMATION
+WAITING FOR CONFIRMATION
      ↓
 USER APPROVES
      ↓
-ACTION
+BINANCE ACTION
 ```
 
 The agent should never force a trade when market conditions are unclear.
 
-A high-quality **NO TRADE** is better than a low-quality trade.
+**A high-quality NO TRADE is better than a low-quality trade.**
 
 ---
 
@@ -214,6 +420,10 @@ A high-quality **NO TRADE** is better than a low-quality trade.
 The agent can transition between states:
 
 ```text
+SCANNING
+   ↓
+CANDIDATE_FOUND
+   ↓
 WATCHING
    ↓
 ANALYZING
@@ -235,38 +445,56 @@ EXIT_READY
 CLOSED
 ```
 
-If no valid setup exists, the agent returns to **WATCHING**.
+If confirmation is incomplete:
+
+```text
+ANALYZING
+   ↓
+WATCHING
+```
+
+If the thesis becomes invalid:
+
+```text
+WATCHING
+   ↓
+INVALIDATED
+   ↓
+SCANNING
+```
 
 ---
 
-## 🎬 Demo
+## 🎬 MVP Demo
 
-Demo video coming soon.
+The MVP will demonstrate the agent:
 
-The MVP demo will show the agent:
+1. Accessing Binance Spot market data
+2. Scanning multiple markets
+3. Filtering potential candidates
+4. Detecting a possible Wyckoff structure
+5. Adding the candidate to the watchlist
+6. Applying SMC confirmation
+7. Evaluating risk/reward
+8. Returning WATCH, TRADE READY, or NO TRADE
 
-1. Receiving a market-analysis request
-2. Retrieving Binance market data
-3. Identifying the Wyckoff market phase
-4. Confirming the setup using SMC
-5. Evaluating risk/reward
-6. Returning TRADE READY, WAIT, or NO TRADE
+The demo can also show direct analysis of a user-requested symbol.
 
 ---
 
 ## 🗺️ Development Roadmap
 
-### V1 — Analyst Agent
+### V1 — Market Discovery Agent
 
-Market Data → Wyckoff → SMC → Trading Decision
+**Binance Spot → Scan → Wyckoff Candidates → Watchlist → SMC Confirmation → Signal**
 
-### V2 — Trading Assistant
+### V2 — Swing Trading Assistant
 
-Market Scan → Setup Detection → Risk → Alert → Human Confirmation
+**Discovery → Setup → Risk → Alert → Human Confirmation → Position Monitoring**
 
-### V3 — Swing Trading Agent
+### V3 — Full Swing Trading Agent
 
-Market Scan → Analysis → Risk → Execution → Position Management → Exit
+**Discovery → Analysis → Risk → Execution → Position Management → Distribution Detection → Exit**
 
 ---
 
