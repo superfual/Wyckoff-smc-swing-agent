@@ -3,7 +3,8 @@ Binance MCP Paper Host Harness
 Wyckoff + SMC Spot Swing Agent
 
 Composes a read-only Binance MCP market-data stack with PaperRuntime. The host
-also exposes a persistent portfolio kill switch for paper entries only.
+also exposes a persistent portfolio kill switch and a non-mutating live-feed
+preflight before paper portfolio state is allowed to advance.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Any, Callable, Sequence
 
 try:
     from .binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
+    from .binance_live_paper_validation import BinanceLivePaperPreflight, validate_binance_live_paper_feed
     from .binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
     from .paper_report import PaperCycleReport, build_paper_cycle_report
     from .paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
@@ -25,6 +27,7 @@ try:
     from .execution import ExecutionConfig
 except ImportError:
     from binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
+    from binance_live_paper_validation import BinanceLivePaperPreflight, validate_binance_live_paper_feed
     from binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
     from paper_report import PaperCycleReport, build_paper_cycle_report
     from paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
@@ -95,6 +98,20 @@ def set_binance_paper_kill_switch(host: BinancePaperHost, active: bool) -> None:
     set_kill_switch(host.runtime.session.portfolio_safety, active)
 
 
+def validate_binance_paper_feed(host: BinancePaperHost, *, decision_time: int) -> BinanceLivePaperPreflight:
+    """Validate real read-only feed freshness/completeness without mutating paper state."""
+    cfg = host.config
+    return validate_binance_live_paper_feed(
+        host.runtime,
+        host.provider,
+        decision_time=decision_time,
+        runtime_config=cfg.runtime,
+        runner_config=cfg.runner,
+        agent_config=cfg.agent,
+        execution_config=cfg.execution,
+    )
+
+
 def run_binance_paper_cycle(host: BinancePaperHost, *, decision_time: int) -> RuntimeCycleResult:
     cfg = host.config
     return run_runtime_cycle(
@@ -119,4 +136,4 @@ def run_binance_paper_cycle_with_report(host: BinancePaperHost, *, decision_time
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Binance MCP paper host harness ready; host tool_call callable required.")
+    print("Binance MCP paper host harness ready; preflight validates live feed before state mutation.")
