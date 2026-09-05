@@ -1,13 +1,14 @@
 """Read-only Binance live-paper feed preflight validation.
 
 Validates real market-data snapshots before they are allowed to mutate paper
-portfolio state. This module never authenticates to an exchange and never sends
-orders.
+portfolio state. Binance klines normally include the currently forming candle;
+that raw candle is expected and is reported as a warning when the closed-candle
+projection safely removes it. This module never authenticates to an exchange
+and never sends orders.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Sequence
 
 try:
     from .market_data import MarketData
@@ -34,7 +35,10 @@ class SymbolFeedValidation:
     valid: bool
     current_price: float | None
     reference_close_time: int | None
+    raw_candle_counts: tuple[tuple[str, int], ...]
     candle_counts: tuple[tuple[str, int], ...]
+    open_candle_counts: tuple[tuple[str, int], ...]
+    warnings: tuple[str, ...]
     blockers: tuple[str, ...]
 
 
@@ -67,14 +71,24 @@ def _validate_symbol_feed(
     runner_config: PaperRunnerConfig,
 ) -> SymbolFeedValidation:
     blockers: list[str] = []
+    warnings: list[str] = []
     closed = build_closed_snapshot(
         market,
         decision_time=decision_time,
         reference_timeframe=runner_config.reference_timeframe,
     )
+    raw_counts = tuple((name, len(getattr(market, field))) for name, field in _TIMEFRAME_FIELD.items())
     counts = tuple((name, len(getattr(closed, field))) for name, field in _TIMEFRAME_FIELD.items())
-    reference_close = _reference_close_time(closed, runner_config.reference_timeframe)
+    open_counts: list[tuple[str, int]] = []
+    for timeframe, field in _TIMEFRAME_FIELD.items():
+        raw = getattr(market, field)
+        closed_tf = getattr(closed, field)
+        dropped = len(raw) - len(closed_tf)
+        open_counts.append((timeframe, max(dropped, 0)))
+        if dropped > 0:
+            warnings.append(f"EXPECTED_OPEN_CANDLE_DROPPED:{timeframe}:{dropped}")
 
+    reference_close = _reference_close_time(closed, runner_config.reference_timeframe)
     if closed.current_price is None or closed.current_price <= 0:
         blockers.append("INVALID_CLOSED_REFERENCE_PRICE")
     if runner_config.require_reference_candle and reference_close is None:
@@ -93,7 +107,10 @@ def _validate_symbol_feed(
         valid=not blockers,
         current_price=closed.current_price,
         reference_close_time=reference_close,
+        raw_candle_counts=raw_counts,
         candle_counts=counts,
+        open_candle_counts=tuple(open_counts),
+        warnings=tuple(warnings),
         blockers=tuple(blockers),
     )
 
@@ -183,11 +200,14 @@ def render_binance_live_paper_preflight(result: BinanceLivePaperPreflight) -> st
     lines = [f"BINANCE LIVE PAPER PREFLIGHT: {'READY' if result.ready else 'BLOCKED'}"]
     lines.append(f"Decision time: {result.decision_time}")
     for item in result.symbols:
-        counts = ", ".join(f"{tf}={count}" for tf, count in item.candle_counts)
+        raw = ", ".join(f"{tf}={count}" for tf, count in item.raw_candle_counts)
+        closed = ", ".join(f"{tf}={count}" for tf, count in item.candle_counts)
         lines.append(
             f"{item.symbol}: {'PASS' if item.valid else 'FAIL'} | price={item.current_price} | "
-            f"reference_close={item.reference_close_time} | {counts}"
+            f"reference_close={item.reference_close_time} | raw[{raw}] | closed[{closed}]"
         )
+        if item.warnings:
+            lines.append("  Warnings: " + ", ".join(item.warnings))
         if item.blockers:
             lines.append("  Blockers: " + ", ".join(item.blockers))
     if result.blockers:
