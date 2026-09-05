@@ -161,6 +161,7 @@ def process_paper_snapshot(
     market: MarketData,
     *,
     timestamp: int,
+    current_portfolio_exposure_pct: float | None = None,
     config: PaperTradingConfig | None = None,
     agent_config: AgentConfig | None = None,
     risk_config: RiskConfig | None = None,
@@ -177,9 +178,9 @@ def process_paper_snapshot(
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_CURRENT_PRICE"])
     if cfg.fee_bps_per_side < 0 or cfg.slippage_bps_per_side < 0 or cfg.cooldown_bars_after_exit < 0:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_PAPER_CONFIG"])
+    if current_portfolio_exposure_pct is not None and not 0 <= current_portfolio_exposure_pct <= 100:
+        return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_PORTFOLIO_EXPOSURE"])
 
-    # Existing positions are evaluated only against the newly supplied closed
-    # snapshot. No future candle collection is available to this function.
     closed_this_step = False
     position = account.open_position
     if position is not None:
@@ -200,10 +201,15 @@ def process_paper_snapshot(
                 closed_this_step = True
 
     cooldown_active = account.cooldown_bars_remaining > 0 or closed_this_step
+    if current_portfolio_exposure_pct is None:
+        exposure_pct = (account.open_position.position_size_quote / account.equity * 100) if account.open_position and account.equity > 0 else 0.0
+    else:
+        exposure_pct = current_portfolio_exposure_pct
+
     decision = analyze_symbol(
         market,
         account_equity=account.equity,
-        current_portfolio_exposure_pct=(account.open_position.position_size_quote / account.equity * 100) if account.open_position and account.equity > 0 else 0.0,
+        current_portfolio_exposure_pct=exposure_pct,
         has_open_position=account.open_position is not None,
         cooldown_active=cooldown_active,
         config=agent_config,
@@ -236,8 +242,6 @@ def process_paper_snapshot(
             events.append(event)
             account.events.append(event)
 
-    # ENTER_SHORT is deliberately never opened in Paper Trading V1 because the
-    # repository is Spot-first. A bearish decision remains analytical/defensive.
     if account.cooldown_bars_remaining > 0 and not closed_this_step:
         account.cooldown_bars_remaining -= 1
 
