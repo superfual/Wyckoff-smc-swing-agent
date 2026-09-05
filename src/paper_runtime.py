@@ -13,7 +13,6 @@ This module performs no exchange authentication and sends no orders.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Protocol, Sequence
 
 try:
@@ -23,7 +22,7 @@ try:
     from .paper_runner import PaperRunnerConfig, PaperRunnerState, RunnerCycleResult, run_paper_cycle
     from .paper_session import PaperSession, PaperSessionConfig, create_paper_session
     from .paper_trading import PaperTradingConfig
-    from .persistence import RecoveryResult, load_checkpoint, save_checkpoint
+    from .persistence import load_checkpoint, save_checkpoint
     from .risk import RiskConfig
     from .scanner import WatchlistSymbol, load_watchlist
 except ImportError:
@@ -33,7 +32,7 @@ except ImportError:
     from paper_runner import PaperRunnerConfig, PaperRunnerState, RunnerCycleResult, run_paper_cycle
     from paper_session import PaperSession, PaperSessionConfig, create_paper_session
     from paper_trading import PaperTradingConfig
-    from persistence import RecoveryResult, load_checkpoint, save_checkpoint
+    from persistence import load_checkpoint, save_checkpoint
     from risk import RiskConfig
     from scanner import WatchlistSymbol, load_watchlist
 
@@ -200,9 +199,13 @@ def run_runtime_cycle(
     checkpoint_saved = False
     if cycle.errors:
         errors.extend(cycle.errors)
-    # Symbol-level runner errors do not invalidate a consumed cycle. Persist the
-    # consumed timeline so restart cannot replay already evaluated symbols.
-    if cfg.checkpoint_after_cycle and runtime.runner_state.last_cycle_time == decision_time:
+    # Persist only a cycle that the runner actually consumed. Pre-cycle rejects
+    # (for example NON_MONOTONIC_CYCLE_TIME) must not rewrite the checkpoint.
+    if (
+        cfg.checkpoint_after_cycle
+        and not cycle.errors
+        and runtime.runner_state.last_cycle_time == decision_time
+    ):
         try:
             save_checkpoint(runtime.checkpoint_path, runtime.session, runtime.runner_state)
             checkpoint_saved = True
