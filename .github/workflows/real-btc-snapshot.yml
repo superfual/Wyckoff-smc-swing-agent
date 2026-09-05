@@ -21,4 +21,6 @@ jobs:
           python-version: '3.12'
 
       - name: Run BTCUSDT real snapshot through V1
+        env:
+          PYTHONPATH: .
         run: python scripts/run_real_btc_snapshot.py
