@@ -66,6 +66,28 @@ class BinancePaperHostConfig:
     session: PaperSessionConfig = PaperSessionConfig()
 
 
+def live_binance_paper_host_config() -> BinancePaperHostConfig:
+    """Return production-paper-safe defaults for a real read-only Binance feed."""
+    return BinancePaperHostConfig(
+        runtime=PaperRuntimeConfig(
+            checkpoint_path="state/binance_live_paper.json",
+            auto_recover=True,
+            checkpoint_after_cycle=True,
+            require_all_symbols=True,
+        ),
+        runner=PaperRunnerConfig(
+            reference_timeframe="1h",
+            require_reference_candle=True,
+            require_exact_reference_close=True,
+            continue_on_symbol_error=True,
+            fair_same_cycle_allocation=True,
+        ),
+        paper=PaperTradingConfig(reference_timeframe="1h"),
+        agent=AgentConfig(trading_mode="SPOT"),
+        execution=ExecutionConfig(trading_mode="SPOT"),
+    )
+
+
 @dataclass
 class BinancePaperHost:
     runtime: PaperRuntime
@@ -91,6 +113,20 @@ def create_binance_paper_host(
     provider = BinanceMarketDataProvider(bridge, cfg.adapter)
     runtime = create_paper_runtime(symbols=symbols, runtime_config=cfg.runtime, session_config=cfg.session)
     return BinancePaperHost(runtime=runtime, provider=provider, config=cfg)
+
+
+def create_live_binance_paper_host(
+    tool_call: ToolCall,
+    *,
+    symbols: Sequence[str] | None = None,
+    config: BinancePaperHostConfig | None = None,
+) -> BinancePaperHost:
+    """Create a real-feed paper host with fail-closed Spot defaults."""
+    return create_binance_paper_host(
+        tool_call,
+        symbols=symbols,
+        config=config or live_binance_paper_host_config(),
+    )
 
 
 def set_binance_paper_kill_switch(host: BinancePaperHost, active: bool) -> None:
@@ -136,4 +172,4 @@ def run_binance_paper_cycle_with_report(host: BinancePaperHost, *, decision_time
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Binance MCP paper host harness ready; preflight validates live feed before state mutation.")
+    print("Binance MCP paper host harness ready; live-safe constructor enables exact closed-candle validation.")
