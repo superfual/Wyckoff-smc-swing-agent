@@ -19,14 +19,21 @@ from src.history_sufficiency import evaluate_history_sufficiency
 from src.market_data import Candle, MarketData
 from src.orchestrator import AgentConfig, analyze_symbol
 
-FIXTURE = ROOT / "tests" / "fixtures" / "btcusdt_spot_20260905_1800.json.zlib.b64"
+FIXTURE_DIR = ROOT / "tests" / "fixtures"
+FIXTURE = FIXTURE_DIR / "btcusdt_spot_20260905_1800.json.zlib.b64"
+FIXTURE_PART_GLOB = "btcusdt_spot_20260905_1800.part*"
 DECISION_TIME = 1_788_631_364_000  # 2026-09-05 18:02:44 UTC
 DURATION_MS = {"1D": 86_400_000, "4H": 14_400_000, "1H": 3_600_000, "15M": 900_000}
 EXPECTED_CLOSED = {"1D": 119, "4H": 239, "1H": 299, "15M": 298}
 
 
 def _decode_fixture() -> dict:
-    packed = base64.b64decode(FIXTURE.read_text(encoding="utf-8").strip())
+    parts = sorted(FIXTURE_DIR.glob(FIXTURE_PART_GLOB), key=lambda p: int(p.suffix.removeprefix(".part")))
+    if parts:
+        encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
+    else:
+        encoded = FIXTURE.read_text(encoding="utf-8").strip()
+    packed = base64.b64decode(encoded)
     return json.loads(zlib.decompress(packed).decode("utf-8"))
 
 
