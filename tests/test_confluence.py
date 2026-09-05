@@ -203,3 +203,54 @@ def test_neutral_sparse_evidence_stays_mixed() -> None:
     assert result.classification == "MIXED"
     assert result.bullish_score == 0
     assert result.bearish_score == 0
+
+
+def test_same_bar_spring_and_sell_side_sweep_are_correlation_discounted() -> None:
+    result = analyze_confluence(bullish_wyckoff(), bullish_smc())
+
+    sweep = next(item for item in result.evidence if item.code == "SELL_SIDE_SWEEP")
+    assert sweep.points == 4.0
+    assert "Correlation discount applied" in sweep.note
+
+
+def test_same_bar_utad_and_buy_side_sweep_are_correlation_discounted() -> None:
+    result = analyze_confluence(bearish_wyckoff(), bearish_smc())
+
+    sweep = next(item for item in result.evidence if item.code == "BUY_SIDE_SWEEP")
+    assert sweep.points == 4.0
+    assert "Correlation discount applied" in sweep.note
+
+
+def test_poi_family_cap_prevents_fvg_and_order_block_from_stacking_freely() -> None:
+    result = analyze_confluence(bullish_wyckoff(), bullish_smc())
+
+    fvg = next(item for item in result.evidence if item.code == "BULLISH_FVG")
+    block = next(item for item in result.evidence if item.code == "BULLISH_OB")
+    assert fvg.points + block.points == 10.0
+    assert block.points == 3.0
+    assert "POI family cap" in block.note
+
+
+def test_wyckoff_family_cap_limits_multiple_same_direction_labels() -> None:
+    result = analyze_confluence(bullish_wyckoff(), bullish_smc())
+    wyckoff_points = sum(item.points for item in result.evidence if item.source == "WYCKOFF" and item.direction == "BULLISH")
+
+    assert wyckoff_points == 38.0
+    assert any("WYCKOFF family cap" in item.note for item in result.evidence if item.source == "WYCKOFF")
+
+
+def test_opposing_choch_is_major_contradiction_and_reduces_confidence() -> None:
+    conflicting_smc = bullish_smc()
+    conflicting_smc.bias = "BEARISH"
+    conflicting_smc.trend_state = "BEARISH_TRANSITION"
+    conflicting_smc.events = [StructureEvent("CHOCH", "BEARISH", 25, 25, 94.0, 20, 95.5, "CLOSE")]
+    conflicting_smc.liquidity_sweeps = []
+    conflicting_smc.fair_value_gaps = []
+    conflicting_smc.order_blocks = []
+
+    aligned = analyze_confluence(bullish_wyckoff(), bullish_smc())
+    conflicted = analyze_confluence(bullish_wyckoff(), conflicting_smc)
+
+    assert any(item.startswith("MAJOR:") for item in conflicted.contradictions)
+    assert conflicted.classification != "HIGH_CONVICTION_BULLISH"
+    assert conflicted.confidence < aligned.confidence
