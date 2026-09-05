@@ -13,13 +13,19 @@ from time import sleep
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 try:
+    from .execution import ExecutionConfig
     from .market_data import MarketData, build_market_data, normalize_price
+    from .orchestrator import AgentConfig
+    from .risk import RiskConfig
     from .scanner import WatchlistSymbol
-    from .watchlist_validation import WatchlistValidationResult, validate_watchlist_batch
+    from .watchlist_validation import WatchlistValidationConfig, WatchlistValidationResult, validate_watchlist_batch
 except ImportError:
+    from execution import ExecutionConfig
     from market_data import MarketData, build_market_data, normalize_price
+    from orchestrator import AgentConfig
+    from risk import RiskConfig
     from scanner import WatchlistSymbol
-    from watchlist_validation import WatchlistValidationResult, validate_watchlist_batch
+    from watchlist_validation import WatchlistValidationConfig, WatchlistValidationResult, validate_watchlist_batch
 
 
 HOUR_MS = 3_600_000
@@ -263,6 +269,10 @@ def acquire_and_validate_watchlist(
     captured_at: int,
     account_equity: float = 10_000.0,
     acquisition_config: BinanceWatchlistAcquisitionConfig | None = None,
+    validation_config: WatchlistValidationConfig | None = None,
+    agent_config: AgentConfig | None = None,
+    risk_config: RiskConfig | None = None,
+    execution_config: ExecutionConfig | None = None,
     sleep_fn: Callable[[float], None] = sleep,
 ) -> BinanceWatchlistPipelineResult:
     acquisition = acquire_binance_watchlist(
@@ -280,6 +290,10 @@ def acquire_and_validate_watchlist(
         decision_time=acquisition.decision_time,
         observed_prices=acquisition.observed_prices,
         account_equity=account_equity,
+        config=validation_config,
+        agent_config=agent_config,
+        risk_config=risk_config,
+        execution_config=execution_config,
     )
     return BinanceWatchlistPipelineResult(
         acquisition,

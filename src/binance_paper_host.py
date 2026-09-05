@@ -10,34 +10,63 @@ preflight before paper portfolio state is allowed to advance.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import sleep
 from typing import Any, Callable, Sequence
 
 try:
     from .binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from .binance_live_paper_validation import BinanceLivePaperPreflight, validate_binance_live_paper_feed
     from .binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
+    from .binance_watchlist_acquisition import (
+        BinanceWatchlistAcquisitionConfig,
+        BinanceWatchlistPipelineResult,
+        acquire_and_validate_watchlist,
+    )
     from .paper_report import PaperCycleReport, build_paper_cycle_report
-    from .paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
-    from .paper_runner import PaperRunnerConfig
+    from .paper_runtime import (
+        PaperRuntime,
+        PaperRuntimeConfig,
+        RuntimeCycleResult,
+        create_paper_runtime,
+        run_runtime_cycle,
+        run_runtime_cycle_with_markets,
+    )
+    from .paper_runner import PaperRunnerConfig, build_closed_snapshot
     from .paper_session import PaperSessionConfig
     from .paper_trading import PaperTradingConfig
     from .portfolio_safety import PortfolioSafetyConfig, set_kill_switch
     from .orchestrator import AgentConfig
     from .risk import RiskConfig
     from .execution import ExecutionConfig
+    from .scanner import load_watchlist
+    from .watchlist_validation import WatchlistValidationConfig
 except ImportError:
     from binance_adapter import BinanceAdapterConfig, BinanceMarketDataProvider
     from binance_live_paper_validation import BinanceLivePaperPreflight, validate_binance_live_paper_feed
     from binance_mcp_bridge import BinanceMCPBridgeConfig, BinanceMCPClientBridge
+    from binance_watchlist_acquisition import (
+        BinanceWatchlistAcquisitionConfig,
+        BinanceWatchlistPipelineResult,
+        acquire_and_validate_watchlist,
+    )
     from paper_report import PaperCycleReport, build_paper_cycle_report
-    from paper_runtime import PaperRuntime, PaperRuntimeConfig, RuntimeCycleResult, create_paper_runtime, run_runtime_cycle
-    from paper_runner import PaperRunnerConfig
+    from paper_runtime import (
+        PaperRuntime,
+        PaperRuntimeConfig,
+        RuntimeCycleResult,
+        create_paper_runtime,
+        run_runtime_cycle,
+        run_runtime_cycle_with_markets,
+    )
+    from paper_runner import PaperRunnerConfig, build_closed_snapshot
     from paper_session import PaperSessionConfig
     from paper_trading import PaperTradingConfig
     from portfolio_safety import PortfolioSafetyConfig, set_kill_switch
     from orchestrator import AgentConfig
     from risk import RiskConfig
     from execution import ExecutionConfig
+    from scanner import load_watchlist
+    from watchlist_validation import WatchlistValidationConfig
 
 ToolCall = Callable[[str, dict[str, Any]], Any]
 
@@ -99,6 +128,20 @@ class BinancePaperHost:
 class BinancePaperCycleOutput:
     result: RuntimeCycleResult
     report: PaperCycleReport
+
+
+@dataclass(frozen=True)
+class BinanceControlRoomOutput:
+    """One acquisition/preflight/paper-cycle result for operator inspection."""
+
+    status: str
+    pipeline: BinanceWatchlistPipelineResult
+    result: RuntimeCycleResult | None = None
+    report: PaperCycleReport | None = None
+
+    @property
+    def decision_time(self) -> int:
+        return self.pipeline.acquisition.decision_time
 
 
 def create_binance_paper_host(
@@ -168,6 +211,99 @@ def run_binance_paper_cycle_with_report(host: BinancePaperHost, *, decision_time
     result = run_binance_paper_cycle(host, decision_time=decision_time)
     report = build_paper_cycle_report(result, host.runtime.session)
     return BinancePaperCycleOutput(result=result, report=report)
+
+
+def run_binance_control_room_cycle(
+    host: BinancePaperHost,
+    *,
+    captured_at: int,
+    acquisition_config: BinanceWatchlistAcquisitionConfig | None = None,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> BinanceControlRoomOutput:
+    """Acquire, validate, then conditionally advance one Spot paper cycle.
+
+    Acquisition and preflight failures return before the paper session, runner
+    state, positions, cash, or checkpoint can be changed. A READY batch is fed
+    directly into the runtime; the host does not fetch a second snapshot.
+    """
+    configured = {item.symbol: item for item in load_watchlist()}
+    try:
+        watchlist = [configured[symbol] for symbol in host.runtime.symbols]
+    except KeyError as exc:
+        raise ValueError(f"Runtime symbol is not enabled in config/watchlist.json: {exc.args[0]}") from exc
+
+    pipeline = acquire_and_validate_watchlist(
+        host.provider.client,
+        watchlist,
+        captured_at=captured_at,
+        account_equity=host.runtime.session.equity,
+        acquisition_config=acquisition_config,
+        validation_config=WatchlistValidationConfig(reference_timeframe=host.config.runner.reference_timeframe),
+        agent_config=host.config.agent,
+        risk_config=host.config.risk,
+        execution_config=host.config.execution,
+        sleep_fn=sleep_fn,
+    )
+    if pipeline.status != "READY":
+        return BinanceControlRoomOutput(pipeline.status, pipeline)
+
+    cfg = host.config
+    closed_markets = [
+        build_closed_snapshot(
+            market,
+            decision_time=pipeline.acquisition.decision_time,
+            reference_timeframe=cfg.runner.reference_timeframe,
+        )
+        for market in pipeline.acquisition.markets
+    ]
+    result = run_runtime_cycle_with_markets(
+        host.runtime,
+        closed_markets,
+        decision_time=pipeline.acquisition.decision_time,
+        runtime_config=cfg.runtime,
+        runner_config=cfg.runner,
+        paper_config=cfg.paper,
+        agent_config=cfg.agent,
+        risk_config=cfg.risk,
+        execution_config=cfg.execution,
+        portfolio_safety_config=cfg.portfolio_safety,
+    )
+    report = build_paper_cycle_report(result, host.runtime.session)
+    status = "PAPER_CYCLE_COMPLETE" if result.processed else "PAPER_CYCLE_FAILED"
+    return BinanceControlRoomOutput(status, pipeline, result, report)
+
+
+def render_binance_control_room_output(output: BinanceControlRoomOutput) -> str:
+    acquisition = output.pipeline.acquisition
+    lines = [
+        f"BINANCE SPOT CONTROL ROOM: {output.status}",
+        f"Decision time: {acquisition.decision_time} | Mode: PAPER ONLY",
+        (
+            f"Acquisition: {len(acquisition.completed_symbols)}/{len(acquisition.expected_symbols)} symbols | "
+            f"failures={len(acquisition.failures)}"
+        ),
+    ]
+    if output.pipeline.validation is not None:
+        validation = output.pipeline.validation
+        lines.append(
+            f"Preflight: {'READY' if validation.ready else 'BLOCKED'} | "
+            f"ranked={len(validation.ranked_symbols)} | deep={len(validation.deep_analysis_symbols)}"
+        )
+        if validation.blockers:
+            lines.append("Blockers: " + "; ".join(validation.blockers))
+    if output.report is not None:
+        report = output.report
+        lines.append(
+            f"Paper cycle: processed={report.processed_symbols} | skipped={report.skipped_symbols} | "
+            f"checkpoint={'YES' if report.checkpoint_saved else 'NO'}"
+        )
+        lines.append(
+            f"Portfolio: equity={report.equity:.2f} | exposure={report.exposure_pct:.2f}% | "
+            f"open={report.open_positions} | trades={report.total_trades}"
+        )
+        if report.errors:
+            lines.append("Cycle errors: " + "; ".join(report.errors))
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

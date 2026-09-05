@@ -172,6 +172,16 @@ The configured 12-symbol Spot watchlist is:
   - no downstream validation until the entire batch is complete
   - read-only bridge support for Spot ticker price
   - no account, wallet, transfer, credential, or order methods
+- Rate-aware acquisition is integrated into the live paper host with:
+  - one `run_binance_control_room_cycle` entry point
+  - enabled symbol/priority loading from `config/watchlist.json`
+  - the exact validated acquisition snapshot passed into the paper runtime
+  - no second provider fetch after preflight
+  - `INCOMPLETE` and `BLOCKED` exits before any paper-state mutation
+  - current ticker price retained only as observation metadata
+  - latest closed reference-candle price supplied to paper decisions
+  - concise acquisition/preflight/cycle/portfolio control-room reporting
+  - regression coverage for session, cash, positions, runner state, and checkpoint immutability
 
 ## Verified BTC checkpoints
 
@@ -264,32 +274,30 @@ These market values are a time-specific validation checkpoint, not golden tradin
 
 ## Last verified repository baseline
 
-Implementation baseline immediately before adding this document:
+Latest completed implementation baseline:
 
-- Commit: `c0dcef1b726186dc66e94ed5f823edd84b49f100`
-- Message: `Harden historical replay no-lookahead audit`
-- Local suite: `260 passed`
-- GitHub Actions workflow `Tests`: success
-- CI run: `33987931763`
+- Parent commit before the current host-integration change: `5ed0d1d98486982bbd70e84db33db055768b07e3`
+- Parent message: `Add rate-aware Binance watchlist acquisition`
+- Local suite with the current host integration: `281 passed`
+- Parent GitHub Actions workflow `Tests`: success
+- Parent CI run: `33990069681`
 
 Always inspect the current `main` commit and latest CI instead of assuming this baseline is still latest.
 
 ## NEXT STEP
 
-### Integrate rate-aware acquisition into the live paper host
+### Package the final hackathon control-room demo
 
-Add one safe host entry point that composes the completed layers without
-advancing paper portfolio state prematurely:
+Turn the completed safe host path into a reproducible, judge-friendly demo:
 
-1. Load enabled symbols and priorities from `config/watchlist.json`.
-2. Construct the read-only Binance MCP bridge.
-3. Run grouped acquisition and complete-batch validation.
-4. Return an `INCOMPLETE` or `BLOCKED` report without mutating paper state.
-5. Permit a paper cycle only after acquisition and validation are both `READY`.
-6. Keep current price as observation metadata; decisions must use the latest closed reference candle.
-7. Produce one concise control-room report for demo and operational review.
-8. Add tests proving failed acquisition/preflight cannot change session, positions, cash, or checkpoints.
-9. Keep live network calls outside CI; use injected deterministic fake MCP tools.
+1. Add a small CLI/demo runner around `run_binance_control_room_cycle` with an injected MCP tool boundary.
+2. Show acquisition status, preflight status, ranking, defensive Spot action, and paper portfolio summary.
+3. Include explicit `PAPER ONLY`, closed-candle, no-lookahead, and no-real-orders labels in output.
+4. Add a deterministic offline demo mode for CI and reviewer reproduction.
+5. Document the live Binance MCP host integration contract without embedding credentials.
+6. Update README quickstart, architecture, and hackathon demo flow.
+7. Prepare a concise submission checklist and video narration around the validated safety story.
+8. Keep real Binance MCP calls outside CI and preserve the injected fake transport in tests.
 
 Do not expand to autonomous execution. Do not send exchange orders.
 

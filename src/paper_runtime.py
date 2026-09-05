@@ -140,6 +140,46 @@ def run_runtime_cycle(
         error = f"MARKET_DATA_PROVIDER_ERROR:{type(exc).__name__}"
         return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, [error])
 
+    return run_runtime_cycle_with_markets(
+        runtime,
+        markets,
+        decision_time=decision_time,
+        runtime_config=cfg,
+        runner_config=runner_config,
+        paper_config=paper_config,
+        agent_config=agent_config,
+        risk_config=risk_config,
+        execution_config=execution_config,
+        portfolio_safety_config=portfolio_safety_config,
+    )
+
+
+def run_runtime_cycle_with_markets(
+    runtime: PaperRuntime,
+    markets: list[MarketData],
+    *,
+    decision_time: int,
+    runtime_config: PaperRuntimeConfig | None = None,
+    runner_config: PaperRunnerConfig | None = None,
+    paper_config: PaperTradingConfig | None = None,
+    agent_config: AgentConfig | None = None,
+    risk_config: RiskConfig | None = None,
+    execution_config: ExecutionConfig | None = None,
+    portfolio_safety_config: PortfolioSafetyConfig | None = None,
+) -> RuntimeCycleResult:
+    """Advance paper state from one already-acquired immutable snapshot.
+
+    The host uses this boundary after acquisition and validation so the exact
+    snapshot that passed preflight is processed without a second provider fetch.
+    """
+    cfg = runtime_config or PaperRuntimeConfig(checkpoint_path=runtime.checkpoint_path)
+    errors: list[str] = []
+
+    if runtime.errors:
+        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, list(runtime.errors))
+    if decision_time < 0:
+        return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, ["INVALID_DECISION_TIME"])
+
     if not isinstance(markets, list) or any(not isinstance(item, MarketData) for item in markets):
         return RuntimeCycleResult(decision_time, [], list(runtime.symbols), None, False, ["INVALID_PROVIDER_RESULT"])
 
