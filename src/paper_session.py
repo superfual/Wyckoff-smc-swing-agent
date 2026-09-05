@@ -137,6 +137,13 @@ def _open_position_count(session: PaperSession) -> int:
     return sum(account.open_position is not None for account in session.accounts.values())
 
 
+def _open_symbols(session: PaperSession) -> tuple[str, ...]:
+    return tuple(
+        symbol for symbol, account in session.accounts.items()
+        if account.open_position is not None
+    )
+
+
 def _exposure_pct(session: PaperSession) -> float:
     if session.equity <= 0:
         return 0.0
@@ -189,6 +196,8 @@ def process_session_snapshot(
             timestamp=timestamp,
             equity=session.equity,
             open_positions=_open_position_count(session),
+            candidate_symbol=market.symbol,
+            open_symbols=_open_symbols(session),
             config=portfolio_safety_config,
         )
         entry_blockers = safety.blockers
