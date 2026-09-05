@@ -2,10 +2,8 @@
 Multi-Symbol Paper Trading Session + Journal
 Wyckoff + SMC Spot Swing Agent
 
-Coordinates symbol-level PaperAccount instances under one shared virtual equity
-and one shared portfolio exposure budget. Each market snapshot is processed
-sequentially, so a newly opened position immediately consumes exposure before
-the next symbol is evaluated.
+Coordinates symbol-level PaperAccount instances under one shared virtual equity,
+one shared exposure budget, and persistent portfolio-level entry guards.
 
 Session equity is mark-to-market: initial equity + realized PnL + unrealized PnL.
 No exchange orders are sent.
@@ -29,6 +27,11 @@ try:
         create_paper_account,
         process_paper_snapshot,
     )
+    from .portfolio_safety import (
+        PortfolioSafetyConfig,
+        PortfolioSafetyState,
+        assess_portfolio_safety,
+    )
     from .risk import RiskConfig
 except ImportError:
     from execution import ExecutionConfig
@@ -43,6 +46,7 @@ except ImportError:
         create_paper_account,
         process_paper_snapshot,
     )
+    from portfolio_safety import PortfolioSafetyConfig, PortfolioSafetyState, assess_portfolio_safety
     from risk import RiskConfig
 
 
@@ -83,6 +87,7 @@ class PaperSession:
     decisions: int = 0
     errors: list[str] = field(default_factory=list)
     unrealized_pnl: float = 0.0
+    portfolio_safety: PortfolioSafetyState = field(default_factory=PortfolioSafetyState)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,6 +113,8 @@ class PaperSessionSummary:
     symbols_seen: int
     errors: list[str]
     unrealized_pnl: float = 0.0
+    kill_switch_active: bool = False
+    daily_pnl_pct: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -124,6 +131,10 @@ def create_paper_session(config: PaperSessionConfig | None = None) -> PaperSessi
 
 def _all_trades(session: PaperSession) -> list[PaperTrade]:
     return [trade for account in session.accounts.values() for trade in account.trades]
+
+
+def _open_position_count(session: PaperSession) -> int:
+    return sum(account.open_position is not None for account in session.accounts.values())
 
 
 def _exposure_pct(session: PaperSession) -> float:
@@ -157,8 +168,9 @@ def process_session_snapshot(
     agent_config: AgentConfig | None = None,
     risk_config: RiskConfig | None = None,
     execution_config: ExecutionConfig | None = None,
+    portfolio_safety_config: PortfolioSafetyConfig | None = None,
 ) -> PaperStepResult:
-    """Process one symbol snapshot under shared session equity/exposure."""
+    """Process one symbol snapshot under shared equity/exposure/safety state."""
 
     account = session.accounts.get(market.symbol)
     if account is None:
@@ -171,6 +183,20 @@ def process_session_snapshot(
     before_realized = account.realized_pnl
     exposure_before = _exposure_pct(session)
 
+    try:
+        safety = assess_portfolio_safety(
+            state=session.portfolio_safety,
+            timestamp=timestamp,
+            equity=session.equity,
+            open_positions=_open_position_count(session),
+            config=portfolio_safety_config,
+        )
+        entry_blockers = safety.blockers
+    except ValueError as exc:
+        error = f"INVALID_PORTFOLIO_SAFETY:{type(exc).__name__}"
+        session.errors.append(f"{market.symbol}:{error}")
+        return PaperStepResult(market.symbol, timestamp, None, account, [], [error])
+
     result = process_paper_snapshot(
         account,
         market,
@@ -180,6 +206,7 @@ def process_session_snapshot(
         agent_config=agent_config,
         risk_config=risk_config,
         execution_config=execution_config,
+        entry_blockers=entry_blockers,
     )
 
     if result.errors:
@@ -190,7 +217,6 @@ def process_session_snapshot(
     if realized_delta:
         session.realized_pnl += realized_delta
 
-    # Always refresh MTM equity, even if no trade was opened/closed this step.
     _revalue_session(session)
 
     if result.decision is not None:
@@ -198,7 +224,7 @@ def process_session_snapshot(
         session.action_counts[result.decision.action] = session.action_counts.get(result.decision.action, 0) + 1
 
     exposure_after = _exposure_pct(session)
-    note = "; ".join(event.note for event in result.events if event.kind in {"OPEN", "CLOSE"})
+    note = "; ".join(event.note for event in result.events if event.kind in {"OPEN", "CLOSE", "BLOCK"})
     session.journal.append(JournalEntry(
         timestamp=timestamp,
         symbol=market.symbol,
@@ -228,6 +254,13 @@ def _max_drawdown_pct(curve: list[SessionEquityPoint]) -> float:
     return max_dd
 
 
+def _daily_pnl_pct(session: PaperSession) -> float:
+    baseline = session.portfolio_safety.day_start_equity
+    if baseline is None or baseline <= 0:
+        return 0.0
+    return (session.equity - baseline) / baseline * 100
+
+
 def summarize_paper_session(session: PaperSession) -> PaperSessionSummary:
     trades = _all_trades(session)
     wins = [trade for trade in trades if trade.outcome == "WIN"]
@@ -247,7 +280,7 @@ def summarize_paper_session(session: PaperSession) -> PaperSessionSummary:
         return_pct=round(return_pct, 4),
         total_decisions=session.decisions,
         action_counts=dict(session.action_counts),
-        open_positions=sum(account.open_position is not None for account in session.accounts.values()),
+        open_positions=_open_position_count(session),
         exposure_pct=round(_exposure_pct(session), 4),
         total_trades=len(trades),
         wins=len(wins),
@@ -259,6 +292,8 @@ def summarize_paper_session(session: PaperSession) -> PaperSessionSummary:
         symbols_seen=len(session.accounts),
         errors=list(session.errors),
         unrealized_pnl=round(session.unrealized_pnl, 8),
+        kill_switch_active=session.portfolio_safety.kill_switch_active,
+        daily_pnl_pct=round(_daily_pnl_pct(session), 4),
     )
 
 
