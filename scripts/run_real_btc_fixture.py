@@ -8,13 +8,17 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+import sys
 import zlib
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from src.history_sufficiency import evaluate_history_sufficiency
 from src.market_data import Candle, MarketData
 from src.orchestrator import AgentConfig, analyze_symbol
 
-ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "btcusdt_spot_20260905_1800.json.zlib.b64"
 DECISION_TIME = 1_788_631_364_000  # 2026-09-05 18:02:44 UTC
 DURATION_MS = {"1D": 86_400_000, "4H": 14_400_000, "1H": 3_600_000, "15M": 900_000}
