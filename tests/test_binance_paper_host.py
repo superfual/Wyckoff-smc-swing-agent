@@ -5,7 +5,9 @@ from src.binance_paper_host import (
     CallableMCPInvoker,
     create_binance_paper_host,
     run_binance_paper_cycle,
+    run_binance_paper_cycle_with_report,
 )
+from src.paper_report import render_paper_cycle_report
 from src.paper_runtime import PaperRuntimeConfig
 
 
@@ -80,6 +82,36 @@ def test_host_runs_end_to_end_paper_cycle_and_saves_checkpoint(tmp_path: Path):
     assert len(tool_call.calls) == 8
     assert {args["symbol"] for _, args in tool_call.calls} == {"BTCUSDT", "ETHUSDT"}
     assert {args["interval"] for _, args in tool_call.calls} == {"1d", "4h", "1h", "15m"}
+
+
+def test_host_can_return_operator_report_with_cycle_result(tmp_path: Path):
+    checkpoint = tmp_path / "paper.json"
+    tool_call = FakeHostToolCall()
+    config = BinancePaperHostConfig(
+        runtime=PaperRuntimeConfig(
+            checkpoint_path=str(checkpoint),
+            auto_recover=False,
+            checkpoint_after_cycle=True,
+        )
+    )
+    host = create_binance_paper_host(tool_call, symbols=["BTCUSDT"], config=config)
+
+    output = run_binance_paper_cycle_with_report(host, decision_time=80 * DAY)
+
+    assert output.result.checkpoint_saved is True
+    assert output.report.decision_time == 80 * DAY
+    assert output.report.processed_symbols == 1
+    assert output.report.symbols[0].symbol == "BTCUSDT"
+    text = render_paper_cycle_report(output.report)
+    assert "PAPER CYCLE" in text
+    assert "BTCUSDT" in text
+    assert "Scanner:" in text
+    assert "Wyckoff:" in text
+    assert "SMC:" in text
+    assert "Confluence:" in text
+    assert "Thesis:" in text
+    assert "Risk:" in text
+    assert "Execution:" in text
 
 
 def test_host_recovery_blocks_replaying_same_cycle(tmp_path: Path):
