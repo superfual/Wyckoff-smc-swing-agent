@@ -23,6 +23,7 @@ def _decision(action="WAIT"):
 def test_create_session_uses_one_shared_equity():
     session = create_paper_session()
     assert session.equity == 10000
+    assert session.unrealized_pnl == 0
     assert session.accounts == {}
     assert session.equity_curve[0].equity == 10000
 
@@ -62,9 +63,31 @@ def test_realized_pnl_updates_shared_equity_and_syncs_accounts(monkeypatch):
     )
 
     assert session.realized_pnl == 100
+    assert session.unrealized_pnl == 0
     assert session.equity == 10100
     assert session.accounts["BTCUSDT"].equity == 10100
     assert session.accounts["ETHUSDT"].equity == 10100
+
+
+def test_unrealized_pnl_marks_shared_equity_and_drawdown(monkeypatch):
+    monkeypatch.setattr(paper_trading, "analyze_symbol", lambda *a, **k: _decision("WAIT"))
+    session = create_paper_session()
+    btc = PaperAccount(10000, 10000)
+    btc.open_position = PaperPosition("BTCUSDT", "LONG", 1, 100, 90, 120, 1000, 10, 0)
+    session.accounts["BTCUSDT"] = btc
+    cfg = PaperTradingConfig(fee_bps_per_side=0, slippage_bps_per_side=0)
+
+    process_session_snapshot(session, _market("BTCUSDT", price=105, low=101, high=106), timestamp=2, paper_config=cfg)
+    assert session.unrealized_pnl == 50
+    assert session.equity == 10050
+
+    process_session_snapshot(session, _market("BTCUSDT", price=98, low=97, high=104), timestamp=3, paper_config=cfg)
+    summary = summarize_paper_session(session)
+    assert session.unrealized_pnl == -20
+    assert session.equity == 9980
+    assert summary.unrealized_pnl == -20
+    assert summary.return_pct == -0.2
+    assert summary.max_drawdown_pct > 0
 
 
 def test_duplicate_symbol_timestamp_is_not_double_counted(monkeypatch):
