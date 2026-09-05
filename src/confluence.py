@@ -5,11 +5,14 @@ Combines already-computed Wyckoff and SMC evidence into an explainable,
 deterministic thesis score. This module does not fetch market data and does
 not create trade entries. It evaluates agreement, contradiction and evidence
 quality so later thesis/risk layers can decide what deserves attention.
+
+V1.1 hardening reduces correlated-evidence double counting, caps evidence
+families, and treats an opposing confirmed CHoCH as a major contradiction.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 try:
@@ -56,6 +59,14 @@ class ConfluenceAnalysis:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+_CATEGORY_CAPS = {
+    "WYCKOFF": 38.0,
+    "STRUCTURE": 14.0,
+    "LIQUIDITY": 10.0,
+    "POI": 10.0,
+}
 
 
 def _add(
@@ -127,17 +138,104 @@ def _smc_evidence(smc: SMCAnalysis) -> list[ConfluenceEvidence]:
     return evidence
 
 
+def _category(item: ConfluenceEvidence) -> str:
+    if item.source == "WYCKOFF":
+        return "WYCKOFF"
+    if item.code in {"CHOCH", "BOS", "STRUCTURE_BIAS"}:
+        return "STRUCTURE"
+    if item.code.endswith("_SWEEP"):
+        return "LIQUIDITY"
+    if item.code.endswith("_FVG") or item.code.endswith("_OB"):
+        return "POI"
+    return "OTHER"
+
+
+def _correlated_sweep_key(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> tuple[str, int] | None:
+    """Detect Wyckoff sweep labels that describe the same bar as an SMC sweep."""
+    if not smc.liquidity_sweeps:
+        return None
+    sweep = smc.liquidity_sweeps[-1]
+    expected = "SPRING" if sweep.direction == "BULLISH" and sweep.side == "SELL_SIDE" else None
+    if sweep.direction == "BEARISH" and sweep.side == "BUY_SIDE":
+        expected = "UTAD"
+    if expected is None:
+        return None
+    for event in reversed(wyckoff.events):
+        if event.code == expected and abs(event.index - sweep.index) <= 1:
+            return expected, sweep.index
+    return None
+
+
+def _dedupe_correlated_evidence(
+    evidence: list[ConfluenceEvidence],
+    wyckoff: WyckoffAnalysis,
+    smc: SMCAnalysis,
+) -> list[ConfluenceEvidence]:
+    """Discount the SMC sweep when Wyckoff labels the same bar as Spring/UTAD."""
+    correlated = _correlated_sweep_key(wyckoff, smc)
+    if correlated is None:
+        return evidence
+
+    wyckoff_code, _ = correlated
+    sweep_code = "SELL_SIDE_SWEEP" if wyckoff_code == "SPRING" else "BUY_SIDE_SWEEP"
+    adjusted: list[ConfluenceEvidence] = []
+    for item in evidence:
+        if item.source == "SMC" and item.code == sweep_code:
+            adjusted.append(replace(
+                item,
+                points=round(item.points * 0.4, 2),
+                note=item.note + f" Correlation discount applied because Wyckoff {wyckoff_code} labels the same liquidity event.",
+            ))
+        else:
+            adjusted.append(item)
+    return adjusted
+
+
+def _cap_evidence(evidence: list[ConfluenceEvidence]) -> list[ConfluenceEvidence]:
+    """Apply per-direction family caps while preserving deterministic evidence order."""
+    used: dict[tuple[str, str], float] = {}
+    capped: list[ConfluenceEvidence] = []
+    for item in evidence:
+        category = _category(item)
+        cap = _CATEGORY_CAPS.get(category)
+        if cap is None:
+            capped.append(item)
+            continue
+        key = (item.direction, category)
+        remaining = max(0.0, cap - used.get(key, 0.0))
+        awarded = min(item.points, remaining)
+        used[key] = used.get(key, 0.0) + awarded
+        note = item.note
+        if awarded < item.points:
+            note += f" {category} family cap reduced this evidence from {item.points:.2f} to {awarded:.2f} points."
+        capped.append(replace(item, points=round(awarded, 2), note=note))
+    return capped
+
+
 def _direction_score(evidence: list[ConfluenceEvidence], direction: str) -> float:
     return sum(item.points for item in evidence if item.direction == direction)
 
 
+def _wyckoff_direction(wyckoff: WyckoffAnalysis) -> str | None:
+    if wyckoff.bias == "ACCUMULATION":
+        return "BULLISH"
+    if wyckoff.bias == "DISTRIBUTION":
+        return "BEARISH"
+    return None
+
+
 def _contradictions(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> list[str]:
     contradictions: list[str] = []
-    wyckoff_direction = "BULLISH" if wyckoff.bias == "ACCUMULATION" else "BEARISH" if wyckoff.bias == "DISTRIBUTION" else None
+    wyckoff_direction = _wyckoff_direction(wyckoff)
     smc_direction = smc.bias if smc.bias in {"BULLISH", "BEARISH"} else None
 
     if wyckoff_direction and smc_direction and wyckoff_direction != smc_direction:
         contradictions.append(f"Wyckoff is {wyckoff_direction.lower()} while SMC structure is {smc_direction.lower()}.")
+
+    if smc.events and wyckoff_direction:
+        latest = smc.events[-1]
+        if latest.kind == "CHOCH" and latest.direction != wyckoff_direction:
+            contradictions.append(f"MAJOR: Latest confirmed CHOCH is {latest.direction.lower()}, directly opposing the Wyckoff thesis.")
 
     if smc.liquidity_sweeps and wyckoff_direction:
         sweep_direction = smc.liquidity_sweeps[-1].direction
@@ -149,6 +247,13 @@ def _contradictions(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> list[str]:
         contradictions.append("Latest active order block points opposite the Wyckoff thesis.")
 
     return contradictions
+
+
+def _contradiction_penalty(contradictions: list[str]) -> float:
+    penalty = 0.0
+    for item in contradictions:
+        penalty += 16.0 if item.startswith("MAJOR:") else 8.0
+    return min(32.0, penalty)
 
 
 def analyze_confluence(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> ConfluenceAnalysis:
@@ -178,7 +283,8 @@ def analyze_confluence(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> Confluence
             errors=errors,
         )
 
-    evidence = _wyckoff_evidence(wyckoff) + _smc_evidence(smc)
+    raw_evidence = _wyckoff_evidence(wyckoff) + _smc_evidence(smc)
+    evidence = _cap_evidence(_dedupe_correlated_evidence(raw_evidence, wyckoff, smc))
     bullish_score = min(100.0, _direction_score(evidence, "BULLISH"))
     bearish_score = min(100.0, _direction_score(evidence, "BEARISH"))
     contradictions = _contradictions(wyckoff, smc)
@@ -195,7 +301,7 @@ def analyze_confluence(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> Confluence
     else:
         bias = "NEUTRAL"
 
-    contradiction_penalty = min(24.0, len(contradictions) * 8.0)
+    contradiction_penalty = _contradiction_penalty(contradictions)
     confidence = min(95.0, dominant * 0.85 + edge * 0.25)
     confidence = max(0.0, confidence - contradiction_penalty)
 
@@ -212,9 +318,9 @@ def analyze_confluence(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> Confluence
         confidence = min(confidence, 55.0)
 
     if classification == "HIGH_CONVICTION_BULLISH":
-        interpretation = "Wyckoff and SMC evidence align strongly on a bullish accumulation/markup thesis."
+        interpretation = "Wyckoff and SMC evidence align strongly on a bullish accumulation/markup thesis after correlation controls."
     elif classification == "HIGH_CONVICTION_BEARISH":
-        interpretation = "Wyckoff and SMC evidence align strongly on a bearish distribution/markdown thesis."
+        interpretation = "Wyckoff and SMC evidence align strongly on a bearish distribution/markdown thesis after correlation controls."
     elif classification == "BULLISH":
         interpretation = "Bullish evidence dominates, but the thesis is not yet fully aligned across all confluence layers."
     elif classification == "BEARISH":
@@ -239,4 +345,4 @@ def analyze_confluence(wyckoff: WyckoffAnalysis, smc: SMCAnalysis) -> Confluence
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Confluence engine ready.")
+    print("Confluence V1.1 correlation-hardened engine ready.")
