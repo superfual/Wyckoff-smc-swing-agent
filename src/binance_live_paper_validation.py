@@ -3,27 +3,30 @@
 Validates real market-data snapshots before they are allowed to mutate paper
 portfolio state. Binance klines normally include the currently forming candle;
 that raw candle is expected and is reported as a warning when the closed-candle
-projection safely removes it. This module never authenticates to an exchange
-and never sends orders.
+projection safely removes it. Strategy-history sufficiency is evaluated on the
+closed snapshot before the feed may become READY. This module never authenticates
+to an exchange and never sends orders.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
 try:
+    from .execution import ExecutionConfig
+    from .history_sufficiency import HistorySufficiency, evaluate_history_sufficiency
     from .market_data import MarketData
+    from .orchestrator import AgentConfig
     from .paper_readiness import LivePaperReadiness, evaluate_live_paper_readiness
     from .paper_runner import PaperRunnerConfig, build_closed_snapshot
     from .paper_runtime import MarketDataProvider, PaperRuntime, PaperRuntimeConfig
-    from .orchestrator import AgentConfig
-    from .execution import ExecutionConfig
 except ImportError:
+    from execution import ExecutionConfig
+    from history_sufficiency import HistorySufficiency, evaluate_history_sufficiency
     from market_data import MarketData
+    from orchestrator import AgentConfig
     from paper_readiness import LivePaperReadiness, evaluate_live_paper_readiness
     from paper_runner import PaperRunnerConfig, build_closed_snapshot
     from paper_runtime import MarketDataProvider, PaperRuntime, PaperRuntimeConfig
-    from orchestrator import AgentConfig
-    from execution import ExecutionConfig
 
 _TIMEFRAME_MS = {"1d": 86_400_000, "4h": 14_400_000, "1h": 3_600_000, "15m": 900_000}
 _TIMEFRAME_FIELD = {"1d": "daily", "4h": "four_hour", "1h": "one_hour", "15m": "fifteen_minute"}
@@ -38,6 +41,7 @@ class SymbolFeedValidation:
     raw_candle_counts: tuple[tuple[str, int], ...]
     candle_counts: tuple[tuple[str, int], ...]
     open_candle_counts: tuple[tuple[str, int], ...]
+    history: HistorySufficiency
     warnings: tuple[str, ...]
     blockers: tuple[str, ...]
 
@@ -69,6 +73,7 @@ def _validate_symbol_feed(
     *,
     decision_time: int,
     runner_config: PaperRunnerConfig,
+    smc_timeframe: str,
 ) -> SymbolFeedValidation:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -102,16 +107,23 @@ def _validate_symbol_feed(
         elif any(candle.timestamp + _TIMEFRAME_MS[timeframe] > decision_time for candle in candles):
             blockers.append(f"UNCLOSED_CANDLE_LEAK:{timeframe}")
 
+    history = evaluate_history_sufficiency(closed, smc_timeframe=smc_timeframe)
+    blockers.extend(history.blockers)
+    warnings.extend(history.warnings)
+
+    unique_blockers = tuple(dict.fromkeys(blockers))
+    unique_warnings = tuple(dict.fromkeys(warnings))
     return SymbolFeedValidation(
         symbol=market.symbol.upper(),
-        valid=not blockers,
+        valid=not unique_blockers,
         current_price=closed.current_price,
         reference_close_time=reference_close,
         raw_candle_counts=raw_counts,
         candle_counts=counts,
         open_candle_counts=tuple(open_counts),
-        warnings=tuple(warnings),
-        blockers=tuple(blockers),
+        history=history,
+        warnings=unique_warnings,
+        blockers=unique_blockers,
     )
 
 
@@ -131,11 +143,12 @@ def validate_binance_live_paper_feed(
 
     runtime_cfg = runtime_config or PaperRuntimeConfig(checkpoint_path=runtime.checkpoint_path)
     runner_cfg = runner_config or PaperRunnerConfig()
+    agent_cfg = agent_config or AgentConfig()
     readiness = evaluate_live_paper_readiness(
         runtime,
         runtime_config=runtime_cfg,
         runner_config=runner_cfg,
-        agent_config=agent_config,
+        agent_config=agent_cfg,
         execution_config=execution_config,
     )
     blockers: list[str] = list(readiness.blockers)
@@ -176,7 +189,12 @@ def validate_binance_live_paper_feed(
         blockers.append("UNEXPECTED_PROVIDER_SYMBOLS:" + ",".join(unexpected))
 
     validations = tuple(
-        _validate_symbol_feed(market, decision_time=decision_time, runner_config=runner_cfg)
+        _validate_symbol_feed(
+            market,
+            decision_time=decision_time,
+            runner_config=runner_cfg,
+            smc_timeframe=agent_cfg.smc_timeframe,
+        )
         for market in markets
         if market.symbol.upper() in expected
     )
@@ -204,7 +222,8 @@ def render_binance_live_paper_preflight(result: BinanceLivePaperPreflight) -> st
         closed = ", ".join(f"{tf}={count}" for tf, count in item.candle_counts)
         lines.append(
             f"{item.symbol}: {'PASS' if item.valid else 'FAIL'} | price={item.current_price} | "
-            f"reference_close={item.reference_close_time} | raw[{raw}] | closed[{closed}]"
+            f"reference_close={item.reference_close_time} | raw[{raw}] | closed[{closed}] | "
+            f"history={'PASS' if item.history.ready else 'BLOCKED'}"
         )
         if item.warnings:
             lines.append("  Warnings: " + ", ".join(item.warnings))
