@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import src.paper_runner as runner
 from src.market_data import Candle, MarketData
 from src.paper_session import create_paper_session
-from src.paper_trading import PaperTradingConfig
+from src.paper_trading import PaperPosition, PaperTradingConfig, create_paper_account
 
 HOUR = 3_600_000
 DAY = 86_400_000
@@ -27,6 +27,15 @@ def market(symbol: str = "BTCUSDT", *, one_hour: list[Candle] | None = None) -> 
     )
 
 
+def _pre_decision(symbol: str, *, action: str = "ENTER_LONG", confluence: float = 70.0, scan: float = 70.0):
+    return SimpleNamespace(
+        symbol=symbol,
+        action=action,
+        confluence=SimpleNamespace(confidence=confluence),
+        scan=SimpleNamespace(score=scan),
+    )
+
+
 def test_closed_snapshot_removes_unclosed_candles_and_derives_price_from_reference_close() -> None:
     m = market(one_hour=[c(0, 100.0), c(HOUR, 101.0), c(2 * HOUR, 500.0)])
     result = runner.build_closed_snapshot(m, decision_time=2 * HOUR, reference_timeframe="1h")
@@ -43,6 +52,7 @@ def test_cycle_processes_each_unique_symbol_once(monkeypatch) -> None:
         return SimpleNamespace(errors=[])
 
     monkeypatch.setattr(runner, "process_session_snapshot", fake_process)
+    monkeypatch.setattr(runner, "analyze_symbol", lambda m, **k: _pre_decision(m.symbol, action="WAIT"))
     state = runner.PaperRunnerState()
     session = create_paper_session()
     result = runner.run_paper_cycle(
@@ -56,6 +66,88 @@ def test_cycle_processes_each_unique_symbol_once(monkeypatch) -> None:
     assert calls == [("BTCUSDT", 2 * HOUR, 101.0), ("ETHUSDT", 2 * HOUR, 101.0)]
     assert state.cycles == 1
     assert state.last_cycle_time == 2 * HOUR
+
+
+def test_fair_allocation_ranks_best_fresh_candidate_before_watchlist_order(monkeypatch) -> None:
+    calls: list[str] = []
+    quality = {
+        "BTCUSDT": (65.0, 70.0),
+        "ETHUSDT": (82.0, 75.0),
+        "SOLUSDT": (74.0, 90.0),
+    }
+
+    def fake_analyze(m, **kwargs):
+        conf, scan = quality[m.symbol]
+        return _pre_decision(m.symbol, confluence=conf, scan=scan)
+
+    def fake_process(session, closed, *, timestamp, **kwargs):
+        calls.append(closed.symbol)
+        return SimpleNamespace(errors=[])
+
+    monkeypatch.setattr(runner, "analyze_symbol", fake_analyze)
+    monkeypatch.setattr(runner, "process_session_snapshot", fake_process)
+
+    runner.run_paper_cycle(
+        runner.PaperRunnerState(),
+        create_paper_session(),
+        [market("BTCUSDT"), market("SOLUSDT"), market("ETHUSDT")],
+        decision_time=2 * HOUR,
+    )
+
+    assert calls == ["ETHUSDT", "SOLUSDT", "BTCUSDT"]
+
+
+def test_fair_allocation_is_invariant_to_input_order(monkeypatch) -> None:
+    quality = {"BTCUSDT": 65.0, "ETHUSDT": 85.0, "SOLUSDT": 75.0}
+
+    def fake_analyze(m, **kwargs):
+        return _pre_decision(m.symbol, confluence=quality[m.symbol], scan=70.0)
+
+    monkeypatch.setattr(runner, "analyze_symbol", fake_analyze)
+
+    def run_order(markets):
+        calls: list[str] = []
+        monkeypatch.setattr(runner, "process_session_snapshot", lambda session, closed, *, timestamp, **kwargs: (calls.append(closed.symbol) or SimpleNamespace(errors=[])))
+        runner.run_paper_cycle(runner.PaperRunnerState(), create_paper_session(), markets, decision_time=2 * HOUR)
+        return calls
+
+    forward = run_order([market("BTCUSDT"), market("ETHUSDT"), market("SOLUSDT")])
+    reverse = run_order([market("SOLUSDT"), market("BTCUSDT"), market("ETHUSDT")])
+    assert forward == reverse == ["ETHUSDT", "SOLUSDT", "BTCUSDT"]
+
+
+def test_active_position_lifecycle_is_serviced_before_fresh_candidates(monkeypatch) -> None:
+    calls: list[str] = []
+    session = create_paper_session()
+    btc = create_paper_account()
+    btc.open_position = PaperPosition("BTCUSDT", "LONG", 0, 100, 90, 120, 1000, 10, 1)
+    session.accounts["BTCUSDT"] = btc
+
+    monkeypatch.setattr(runner, "analyze_symbol", lambda m, **k: _pre_decision(m.symbol, confluence=99.0))
+    monkeypatch.setattr(runner, "process_session_snapshot", lambda session, closed, *, timestamp, **kwargs: (calls.append(closed.symbol) or SimpleNamespace(errors=[])))
+
+    runner.run_paper_cycle(
+        runner.PaperRunnerState(),
+        session,
+        [market("ETHUSDT"), market("BTCUSDT")],
+        decision_time=2 * HOUR,
+    )
+    assert calls[0] == "BTCUSDT"
+
+
+def test_fair_allocation_can_be_disabled_for_research_comparison(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(runner, "analyze_symbol", lambda m, **k: _pre_decision(m.symbol, confluence=99.0))
+    monkeypatch.setattr(runner, "process_session_snapshot", lambda session, closed, *, timestamp, **kwargs: (calls.append(closed.symbol) or SimpleNamespace(errors=[])))
+
+    runner.run_paper_cycle(
+        runner.PaperRunnerState(),
+        create_paper_session(),
+        [market("SOLUSDT"), market("BTCUSDT")],
+        decision_time=2 * HOUR,
+        config=runner.PaperRunnerConfig(fair_same_cycle_allocation=False),
+    )
+    assert calls == ["SOLUSDT", "BTCUSDT"]
 
 
 def test_duplicate_symbol_in_same_cycle_is_rejected(monkeypatch) -> None:
@@ -75,7 +167,7 @@ def test_duplicate_symbol_in_same_cycle_is_rejected(monkeypatch) -> None:
     assert calls == ["BTCUSDT"]
     assert result.processed_symbols == 1
     assert result.skipped_symbols == 1
-    assert "DUPLICATE_SYMBOL_IN_CYCLE" in result.symbol_results[1].errors
+    assert "DUPLICATE_SYMBOL_IN_CYCLE" in result.symbol_results[0].errors
 
 
 def test_non_monotonic_cycle_time_is_rejected_without_processing(monkeypatch) -> None:
@@ -96,7 +188,6 @@ def test_exact_reference_close_rejects_stale_snapshot(monkeypatch) -> None:
 
     monkeypatch.setattr(runner, "process_session_snapshot", fail_if_called)
     cfg = runner.PaperRunnerConfig(require_exact_reference_close=True)
-    # Latest closed 1h candle closes at 2H, but the decision occurs at 3H.
     result = runner.run_paper_cycle(
         runner.PaperRunnerState(), create_paper_session(), [market()], decision_time=3 * HOUR, config=cfg
     )
