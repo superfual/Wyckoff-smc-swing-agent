@@ -6,8 +6,8 @@ Serializes PaperSession + PaperRunnerState into a versioned JSON checkpoint and
 restores them after restart. Writes use an atomic temp-file replace so a process
 interruption is less likely to leave a partially written checkpoint.
 
-Legacy checkpoints are migrated additively for MTM equity and portfolio safety.
-This module stores no exchange credentials and sends no orders.
+Legacy checkpoints are migrated additively for MTM equity, portfolio safety,
+and pending-entry state. This module stores no exchange credentials and sends no orders.
 """
 
 from __future__ import annotations
@@ -111,6 +111,12 @@ def _account(raw: dict[str, Any]) -> PaperAccount:
         cooldown_bars_remaining=raw.get("cooldown_bars_remaining", 0),
         unrealized_pnl=raw.get("unrealized_pnl", 0.0),
         mark_price=raw.get("mark_price"),
+        pending_entry_price=raw.get("pending_entry_price"),
+        pending_stop_price=raw.get("pending_stop_price"),
+        pending_target_price=raw.get("pending_target_price"),
+        pending_size_quote=raw.get("pending_size_quote", 0.0),
+        pending_created_timestamp=raw.get("pending_created_timestamp"),
+        pending_age_bars=raw.get("pending_age_bars", 0),
     )
 
 
@@ -179,6 +185,15 @@ def _validate_recovered(session: PaperSession, runner_state: PaperRunnerState) -
             errors.append(f"INVALID_ACCOUNT_TIMESTAMP:{symbol}")
         if account.cooldown_bars_remaining < 0:
             errors.append(f"INVALID_ACCOUNT_COOLDOWN:{symbol}")
+        if account.pending_age_bars < 0 or account.pending_size_quote < 0:
+            errors.append(f"INVALID_PENDING_ENTRY_STATE:{symbol}")
+        pending_values = (account.pending_entry_price, account.pending_stop_price, account.pending_target_price)
+        if any(value is not None and value <= 0 for value in pending_values):
+            errors.append(f"INVALID_PENDING_ENTRY_PRICE:{symbol}")
+        if account.pending_created_timestamp is not None and account.pending_created_timestamp < 0:
+            errors.append(f"INVALID_PENDING_ENTRY_TIMESTAMP:{symbol}")
+        if account.open_position is not None and account.pending_entry_price is not None:
+            errors.append(f"POSITION_AND_PENDING_ENTRY_CONFLICT:{symbol}")
         if runner_state.last_cycle_time is not None and account.last_processed_timestamp is not None:
             if account.last_processed_timestamp > runner_state.last_cycle_time:
                 errors.append(f"ACCOUNT_AHEAD_OF_RUNNER:{symbol}")
