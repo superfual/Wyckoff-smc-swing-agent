@@ -13,6 +13,8 @@ def _rich_state():
     account = create_paper_account()
     account.equity = 10125.0
     account.realized_pnl = 125.0
+    account.unrealized_pnl = 20.0
+    account.mark_price = 101.0
     account.last_processed_timestamp = 7_200_000
     account.cooldown_bars_remaining = 2
     account.open_position = PaperPosition(
@@ -29,11 +31,12 @@ def _rich_state():
     account.events.append(PaperEvent(7_200_000, "OPEN", "ENTER_LONG", "Opened"))
     session.accounts["BTCUSDT"] = account
     session.equity = 10125.0
-    session.realized_pnl = 125.0
+    session.realized_pnl = 105.0
+    session.unrealized_pnl = 20.0
     session.decisions = 12
     session.action_counts = {"ENTER_LONG": 2, "WAIT": 10}
     session.journal.append(JournalEntry(7_200_000, "BTCUSDT", "ENTER_LONG", ["DECISION", "OPEN"], 10125.0, 19.75, "Opened"))
-    session.equity_curve.append(SessionEquityPoint(7_200_000, 10125.0, 125.0, 19.75))
+    session.equity_curve.append(SessionEquityPoint(7_200_000, 10125.0, 105.0, 19.75, 20.0))
     runner = PaperRunnerState(last_cycle_time=7_200_000, cycles=2, errors=["ETHUSDT:REFERENCE_CANDLE_NOT_FRESH"])
     return session, runner
 
@@ -48,12 +51,16 @@ def test_round_trip_restores_complete_state(tmp_path) -> None:
     assert recovered.runner_state.last_cycle_time == 7_200_000
     assert recovered.runner_state.cycles == 2
     assert recovered.session.equity == 10125.0
+    assert recovered.session.realized_pnl == 105.0
+    assert recovered.session.unrealized_pnl == 20.0
     assert recovered.session.decisions == 12
     account = recovered.session.accounts["BTCUSDT"]
     assert account.last_processed_timestamp == 7_200_000
     assert account.cooldown_bars_remaining == 2
     assert account.open_position is not None
     assert account.open_position.entry_price == 100.0
+    assert account.unrealized_pnl == 20.0
+    assert account.mark_price == 101.0
     assert len(account.trades) == 1
     assert account.trades[0].exit_reason == "TARGET"
     assert recovered.session.journal[-1].action == "ENTER_LONG"
@@ -64,6 +71,33 @@ def test_checkpoint_has_versioned_schema(tmp_path) -> None:
     path = save_checkpoint(tmp_path / "checkpoint.json", session, runner)
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["metadata"] == {"schema": CHECKPOINT_SCHEMA, "version": CHECKPOINT_VERSION}
+
+
+def test_legacy_open_position_migrates_unbooked_entry_fee(tmp_path) -> None:
+    session, runner = _rich_state()
+    path = save_checkpoint(tmp_path / "legacy.json", session, runner)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_session = payload["paper_session"]
+    raw_session.pop("unrealized_pnl", None)
+    raw_session["realized_pnl"] = 125.0
+    raw_session["equity"] = 10125.0
+    raw_account = raw_session["accounts"]["BTCUSDT"]
+    raw_account.pop("unrealized_pnl", None)
+    raw_account.pop("mark_price", None)
+    raw_account["realized_pnl"] = 125.0
+    raw_account["equity"] = 10125.0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    recovered = load_checkpoint(path)
+
+    assert recovered.recovered is True
+    assert recovered.session.realized_pnl == 123.0
+    assert recovered.session.unrealized_pnl == 0.0
+    assert recovered.session.equity == 10123.0
+    account = recovered.session.accounts["BTCUSDT"]
+    assert account.realized_pnl == 123.0
+    assert account.unrealized_pnl == 0.0
+    assert account.mark_price is None
 
 
 def test_corrupt_json_is_rejected(tmp_path) -> None:
