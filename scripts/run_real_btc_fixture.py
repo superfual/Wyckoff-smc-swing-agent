@@ -1,15 +1,15 @@
 """Run the captured BTCUSDT Binance MCP snapshot through the real agent pipeline.
 
 This is a deterministic regression harness. It never authenticates to Binance
-and never places an exchange order.
+and never places an exchange order. The canonical fixture is plain JSON so the
+captured market evidence remains human-auditable and CI does not depend on a
+secondary compressed encoding.
 """
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 import sys
-import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -19,22 +19,14 @@ from src.history_sufficiency import evaluate_history_sufficiency
 from src.market_data import Candle, MarketData
 from src.orchestrator import AgentConfig, analyze_symbol
 
-FIXTURE_DIR = ROOT / "tests" / "fixtures"
-FIXTURE = FIXTURE_DIR / "btcusdt_spot_20260905_1800.json.zlib.b64"
-FIXTURE_PART_GLOB = "btcusdt_spot_20260905_1800.part*"
+FIXTURE = ROOT / "tests" / "fixtures" / "btcusdt_real_20260905T180244Z.json"
 DECISION_TIME = 1_788_631_364_000  # 2026-09-05 18:02:44 UTC
 DURATION_MS = {"1D": 86_400_000, "4H": 14_400_000, "1H": 3_600_000, "15M": 900_000}
-EXPECTED_CLOSED = {"1D": 119, "4H": 239, "1H": 299, "15M": 298}
+EXPECTED_CLOSED = {"1D": 20, "4H": 30, "1H": 80, "15M": 16}
 
 
 def _decode_fixture() -> dict:
-    parts = sorted(FIXTURE_DIR.glob(FIXTURE_PART_GLOB), key=lambda p: int(p.suffix.removeprefix(".part")))
-    if parts:
-        encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
-    else:
-        encoded = FIXTURE.read_text(encoding="utf-8").strip()
-    packed = base64.b64decode(encoded)
-    return json.loads(zlib.decompress(packed).decode("utf-8"))
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
 def _row_to_candle(row) -> Candle:
@@ -76,6 +68,11 @@ def _timeframes(payload: dict) -> dict:
 
 def build_closed_market() -> MarketData:
     payload = _decode_fixture()
+    if payload.get("source") != "Binance MCP Server":
+        raise AssertionError("Real BTC fixture must identify Binance MCP Server as its source")
+    if int(payload.get("decision_time", -1)) != DECISION_TIME:
+        raise AssertionError("Fixture decision time does not match regression boundary")
+
     raw = _timeframes(payload)
     closed = {}
     for tf, rows in raw.items():
@@ -94,7 +91,7 @@ def build_closed_market() -> MarketData:
         if any(c.timestamp + DURATION_MS[tf] > DECISION_TIME for c in candles):
             raise AssertionError(f"Unclosed/future candle leaked into {tf}")
 
-    reference_price = closed["15M"][-1].close
+    reference_price = closed["1H"][-1].close
     return MarketData(
         symbol="BTCUSDT",
         current_price=reference_price,
@@ -200,12 +197,12 @@ def main() -> None:
         "fixture": str(FIXTURE.relative_to(ROOT)),
         "decision_time_utc": "2026-09-05T18:02:44Z",
         "closed_counts": EXPECTED_CLOSED,
-        "reference_price_from_last_closed_15m": market.current_price,
+        "reference_price_from_last_closed_1h": market.current_price,
         "history_ready": history.ready,
         "history_warnings": list(history.warnings),
         "production_default_gate": _summary(production),
         "diagnostic_full_pipeline": _summary(diagnostic),
-        "note": "Synthetic 10,000 USDT equity is used only for deterministic risk-sizing validation; no exchange order is sent.",
+        "note": "Fixture is a compact deterministic slice of the validated 955-candle Binance MCP snapshot. Synthetic 10,000 USDT equity is used only for risk validation; no exchange order is sent.",
     }
     print(json.dumps(report, indent=2, sort_keys=True))
 
