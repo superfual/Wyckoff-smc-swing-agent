@@ -69,6 +69,28 @@ def _round_optional(value: Any, digits: int = 2) -> float | None:
     return round(float(value), digits)
 
 
+def _spot_operator_action(action: str | None) -> str:
+    return {
+        "ENTER_LONG": "BUY_SPOT",
+        "ENTER_SHORT": "FUTURES_SHORT",
+        "AVOID_BUY": "AVOID_BUY",
+        "WAIT_RETRACE": "WAIT_RETRACE",
+        "BLOCKED": "BLOCKED",
+        "WAIT": "WAIT",
+        "SKIP": "SKIP",
+        "SKIPPED": "SKIPPED",
+    }.get(action or "", action or "N/A")
+
+
+def _spot_thesis(direction: str | None) -> str:
+    return {
+        "LONG": "BULLISH (SPOT BUY THESIS)",
+        "SHORT": "BEARISH (AVOID BUY IN SPOT)",
+        "NEUTRAL": "NEUTRAL",
+        "UNKNOWN": "UNKNOWN",
+    }.get(direction or "", direction or "")
+
+
 def build_paper_cycle_report(result: RuntimeCycleResult, session: PaperSession) -> PaperCycleReport:
     summary = summarize_paper_session(session)
     snapshots: list[SymbolDecisionSnapshot] = []
@@ -147,6 +169,7 @@ def render_paper_cycle_report(report: PaperCycleReport) -> str:
             f"exposure={report.exposure_pct:.2f}% | open={report.open_positions} | trades={report.total_trades}"
         ),
         f"Safety: kill_switch={'ON' if report.kill_switch_active else 'OFF'}",
+        "Mode: SPOT PAPER — BUY_SPOT means acquire the asset; no Futures long is implied.",
         (
             f"Cycle: processed={report.processed_symbols} | skipped={report.skipped_symbols} | "
             f"checkpoint={'YES' if report.checkpoint_saved else 'NO'}"
@@ -155,7 +178,7 @@ def render_paper_cycle_report(report: PaperCycleReport) -> str:
 
     for item in report.symbols:
         lines.append("")
-        lines.append(f"{item.symbol} | {item.action} | processed={'YES' if item.processed else 'NO'}")
+        lines.append(f"{item.symbol} | {_spot_operator_action(item.action)} | processed={'YES' if item.processed else 'NO'}")
         scanner = item.scanner_classification or "N/A"
         if item.scanner_score is not None:
             scanner += f" ({item.scanner_score:.1f})"
@@ -166,10 +189,11 @@ def render_paper_cycle_report(report: PaperCycleReport) -> str:
         if item.confluence_confidence is not None:
             confluence += f" ({item.confluence_confidence:.1f}%)"
         lines.append(f"  Confluence: {confluence}")
-        lines.append(f"  Thesis: {item.thesis_state or 'N/A'} {item.thesis_direction or ''}".rstrip())
+        thesis_text = _spot_thesis(item.thesis_direction)
+        lines.append(f"  Thesis: {item.thesis_state or 'N/A'} {thesis_text}".rstrip())
         lines.append(f"  Risk: {item.risk_decision or 'N/A'}")
-        lines.append(f"  Execution: {item.execution_state or 'N/A'} / {item.execution_action or 'N/A'}")
-        lines.append(f"  Position: {'OPEN' if item.open_position else 'FLAT'}")
+        lines.append(f"  Execution: {item.execution_state or 'N/A'} / {_spot_operator_action(item.execution_action)}")
+        lines.append(f"  Position: {'SPOT HOLDING OPEN' if item.open_position else 'FLAT'}")
         if item.event_kinds:
             lines.append("  Events: " + ", ".join(item.event_kinds))
         if item.blockers:
