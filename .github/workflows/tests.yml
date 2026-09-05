@@ -27,3 +27,6 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Run BTCUSDT real-feed end-to-end regression
+        run: python scripts/run_real_btc_fixture.py
