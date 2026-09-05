@@ -11,6 +11,9 @@ V1.1 books entry fees immediately and marks open positions to the latest closed
 reference price so paper equity reflects unrealized PnL.
 V1.2 accepts explicit portfolio-level entry blockers while continuing management
 of already-open positions.
+V1.3 models fresh Spot entries as pending limit orders that can only fill on a
+later closed candle. This prevents using the signal candle's earlier high/low as
+post-decision fill evidence.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ except ImportError:
     from orchestrator import AgentConfig, AgentDecision, analyze_symbol
     from risk import RiskConfig
 
-PaperEventKind = Literal["DECISION", "OPEN", "CLOSE", "BLOCK"]
+PaperEventKind = Literal["DECISION", "ORDER", "OPEN", "CLOSE", "MISS", "BLOCK"]
 PaperExitReason = Literal["STOP", "TARGET"]
 PaperReferenceTimeframe = Literal["1d", "4h", "1h", "15m"]
 
@@ -49,6 +52,8 @@ class PaperTradingConfig:
     cooldown_bars_after_exit: int = 1
     conservative_same_bar: bool = True
     reference_timeframe: PaperReferenceTimeframe = "1h"
+    entry_order_ttl_bars: int = 2
+    conservative_entry_same_bar_stop: bool = True
 
 
 @dataclass
@@ -103,6 +108,12 @@ class PaperAccount:
     cooldown_bars_remaining: int = 0
     unrealized_pnl: float = 0.0
     mark_price: float | None = None
+    pending_entry_price: float | None = None
+    pending_stop_price: float | None = None
+    pending_target_price: float | None = None
+    pending_size_quote: float = 0.0
+    pending_created_timestamp: int | None = None
+    pending_age_bars: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,10 +137,6 @@ def create_paper_account(config: PaperTradingConfig | None = None) -> PaperAccou
     if cfg.initial_equity <= 0:
         raise ValueError("initial_equity must be > 0")
     return PaperAccount(initial_equity=cfg.initial_equity, equity=cfg.initial_equity)
-
-
-def _entry_fill(price: float, slippage_bps: float) -> float:
-    return price * (1 + slippage_bps / 10_000)
 
 
 def _exit_fill(price: float, slippage_bps: float) -> float:
@@ -157,10 +164,18 @@ def _mark_to_market(account: PaperAccount, price: float) -> None:
     account.equity += current - previous
 
 
+def _clear_pending(account: PaperAccount) -> None:
+    account.pending_entry_price = None
+    account.pending_stop_price = None
+    account.pending_target_price = None
+    account.pending_size_quote = 0.0
+    account.pending_created_timestamp = None
+    account.pending_age_bars = 0
+
+
 def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, reason: PaperExitReason, cfg: PaperTradingConfig) -> PaperTrade:
     position = account.open_position
     assert position is not None
-
     account.equity -= account.unrealized_pnl
     account.unrealized_pnl = 0.0
     account.mark_price = None
@@ -200,7 +215,6 @@ def _close_position(account: PaperAccount, timestamp: int, planned_exit: float, 
 
 
 def _apply_entry_blockers(decision: AgentDecision, blockers: Sequence[str]) -> None:
-    """Convert an otherwise executable fresh entry into an explicit portfolio block."""
     if not blockers or decision.action not in {"ENTER_LONG", "ENTER_SHORT"}:
         return
     unique = list(dict.fromkeys(str(item) for item in blockers if str(item)))
@@ -218,6 +232,65 @@ def _apply_entry_blockers(decision: AgentDecision, blockers: Sequence[str]) -> N
     decision.action = "BLOCKED"
     decision.reasons.extend(f"Portfolio safety: {item}." for item in unique)
     decision.interpretation = "Symbol-level setup passed, but portfolio-level safety blocks new exposure."
+
+
+def _try_fill_pending(account: PaperAccount, market: MarketData, timestamp: int, cfg: PaperTradingConfig, events: list[PaperEvent]) -> bool:
+    if account.pending_entry_price is None or account.open_position is not None:
+        return False
+    candle = _reference_candle(market, cfg.reference_timeframe)
+    if candle is None:
+        return False
+
+    limit_price = account.pending_entry_price
+    account.pending_age_bars += 1
+    if candle.low <= limit_price:
+        stop = account.pending_stop_price
+        target = account.pending_target_price
+        size_quote = min(account.pending_size_quote, account.equity)
+        if stop is None or target is None or size_quote <= 0:
+            _clear_pending(account)
+            return False
+
+        # A buy limit never fills above its limit. If price gaps below it, using
+        # the limit itself is conservative versus assuming price improvement.
+        entry = limit_price
+        units = size_quote / entry
+        entry_fee = size_quote * cfg.fee_bps_per_side / 10_000
+        account.realized_pnl -= entry_fee
+        account.equity -= entry_fee
+        account.open_position = PaperPosition(
+            symbol=market.symbol,
+            direction="LONG",
+            entry_time=timestamp,
+            entry_price=entry,
+            stop_price=stop,
+            target_price=target,
+            position_size_quote=size_quote,
+            units=units,
+            entry_fee_quote=entry_fee,
+        )
+        _clear_pending(account)
+        _mark_to_market(account, market.current_price)
+        event = PaperEvent(timestamp, "OPEN", "ENTER_LONG", f"Pending Spot buy limit filled at {entry:.8f} with {size_quote:.2f} quote exposure; entry fee {entry_fee:.2f} booked.")
+        events.append(event)
+        account.events.append(event)
+
+        # If the fill candle also trades through the stop, bar ordering is
+        # unknown. V1 fails conservatively by assuming the stop occurred after fill.
+        if cfg.conservative_entry_same_bar_stop and candle.low <= stop:
+            trade = _close_position(account, timestamp, stop, "STOP", cfg)
+            close_event = PaperEvent(timestamp, "CLOSE", "STOP", f"Entry-fill candle also breached stop; conservative same-bar stop at {trade.exit_price:.8f}; net PnL {trade.net_pnl_quote:.2f}.")
+            events.append(close_event)
+            account.events.append(close_event)
+        return True
+
+    if account.pending_age_bars >= cfg.entry_order_ttl_bars:
+        missed = account.pending_entry_price
+        _clear_pending(account)
+        event = PaperEvent(timestamp, "MISS", "ENTRY_MISSED", f"Spot buy limit at {missed:.8f} expired without a later candle trading down to the limit.")
+        events.append(event)
+        account.events.append(event)
+    return False
 
 
 def process_paper_snapshot(
@@ -241,7 +314,7 @@ def process_paper_snapshot(
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["NON_MONOTONIC_TIMESTAMP"])
     if market.current_price is None or market.current_price <= 0:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_CURRENT_PRICE"])
-    if cfg.fee_bps_per_side < 0 or cfg.slippage_bps_per_side < 0 or cfg.cooldown_bars_after_exit < 0:
+    if cfg.fee_bps_per_side < 0 or cfg.slippage_bps_per_side < 0 or cfg.cooldown_bars_after_exit < 0 or cfg.entry_order_ttl_bars <= 0:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_PAPER_CONFIG"])
     if cfg.reference_timeframe not in _TIMEFRAME_FIELD:
         return PaperStepResult(market.symbol, timestamp, None, account, [], ["INVALID_REFERENCE_TIMEFRAME"])
@@ -266,6 +339,11 @@ def process_paper_snapshot(
                 events.append(event)
                 account.events.append(event)
                 closed_this_step = True
+
+    if account.open_position is None and account.pending_entry_price is not None:
+        filled = _try_fill_pending(account, market, timestamp, cfg, events)
+        if filled and account.open_position is None:
+            closed_this_step = True
 
     if account.open_position is not None:
         _mark_to_market(account, market.current_price)
@@ -300,26 +378,14 @@ def process_paper_snapshot(
 
     if decision.action == "ENTER_LONG" and decision.execution is not None and decision.execution.allowed and account.open_position is None and not cooldown_active:
         execution = decision.execution
-        if execution.planned_entry is not None and execution.stop_price is not None and execution.target_price is not None and execution.position_size_quote > 0:
-            entry = _entry_fill(execution.planned_entry, cfg.slippage_bps_per_side)
-            size_quote = min(execution.position_size_quote, account.equity)
-            units = size_quote / entry
-            entry_fee = size_quote * cfg.fee_bps_per_side / 10_000
-            account.realized_pnl -= entry_fee
-            account.equity -= entry_fee
-            account.open_position = PaperPosition(
-                symbol=market.symbol,
-                direction="LONG",
-                entry_time=timestamp,
-                entry_price=entry,
-                stop_price=execution.stop_price,
-                target_price=execution.target_price,
-                position_size_quote=size_quote,
-                units=units,
-                entry_fee_quote=entry_fee,
-            )
-            _mark_to_market(account, market.current_price)
-            event = PaperEvent(timestamp, "OPEN", "ENTER_LONG", f"Virtual long opened at {entry:.8f} with {size_quote:.2f} quote exposure; entry fee {entry_fee:.2f} booked.")
+        if account.pending_entry_price is None and execution.planned_entry is not None and execution.stop_price is not None and execution.target_price is not None and execution.position_size_quote > 0:
+            account.pending_entry_price = execution.planned_entry
+            account.pending_stop_price = execution.stop_price
+            account.pending_target_price = execution.target_price
+            account.pending_size_quote = execution.position_size_quote
+            account.pending_created_timestamp = timestamp
+            account.pending_age_bars = 0
+            event = PaperEvent(timestamp, "ORDER", "BUY_LIMIT_PENDING", f"Spot buy limit staged at {execution.planned_entry:.8f}; fill evaluation begins on a later closed {cfg.reference_timeframe} candle.")
             events.append(event)
             account.events.append(event)
 
@@ -332,4 +398,4 @@ def process_paper_snapshot(
 
 if __name__ == "__main__":
     print("Wyckoff + SMC Spot Swing Agent")
-    print("Paper trading engine ready; virtual positions only.")
+    print("Paper trading engine ready; virtual Spot positions only.")
