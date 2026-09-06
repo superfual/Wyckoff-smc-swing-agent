@@ -16,6 +16,17 @@ The static GitHub Pages dashboard presents the verified 12-symbol snapshot,
 safety gates, paper portfolio, pipeline, and links to reproducible evidence. It
 does not call Binance or expose credentials/order functions in the browser.
 
+## Live Interactive Demo
+
+Watch the agent retrieve live BTCUSDT Spot data through Binance MCP and run the
+complete control-room pipeline inside ChatGPT:
+
+**[Watch the live ChatGPT + Binance MCP demo](https://www.youtube.com/watch?v=Q66WT2gQNWQ)**
+
+The live run remains PAPER ONLY: it filters unclosed candles, validates history,
+evaluates the full strategy and risk pipeline, and allows `NO_BUY` when the
+setup is incomplete. It does not submit an exchange order.
+
 From the repository root (Python 3.11+; no API key required):
 
 ```bash
