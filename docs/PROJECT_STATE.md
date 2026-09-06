@@ -206,6 +206,13 @@ The configured 12-symbol Spot watchlist is:
   - read-only repository permission
   - downloadable `control-room-demo-report` artifact
   - no credentials, live account access, or exchange-order surface
+- Judge-facing static dashboard added under `dashboard/` with:
+  - GitHub Pages deployment workflow
+  - final verified 12-symbol ranking and paper portfolio snapshot
+  - visible safety and fail-closed execution gates
+  - responsive desktop/mobile control-room layout
+  - direct links to the reproducible demo, live evidence, CI, and repository
+  - no client-side Binance calls, credentials, account access, or order surface
 
 ## Verified BTC checkpoints
 
@@ -316,8 +323,8 @@ Use the completed reproducible package to finish the judge-facing submission:
 
 1. Record the 90-second flow in `docs/SUBMISSION_CHECKLIST.md` using the final
    evidence in `docs/LIVE_CONTROL_ROOM_20260906.md`.
-2. Show the public repository, run `Control-Room Demo` from the Actions tab,
-   and show the latest green CI.
+2. Show the GitHub Pages dashboard, run `Control-Room Demo` from the Actions
+   tab, and show the latest green CI.
 3. Add the final demo-video URL and exact submission fields once available.
 4. Recheck the event deadline, survey, and required social tasks before submission.
 5. Freeze V1 after the submission commit; defer alerts and real execution to post-hackathon work.

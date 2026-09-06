@@ -8,6 +8,14 @@
 
 ## Run the deterministic demo
 
+Open the judge-facing dashboard:
+
+**[Wyckoff + SMC Spot Control Room](https://superfual.github.io/Wyckoff-smc-swing-agent/)**
+
+The static GitHub Pages dashboard presents the verified 12-symbol snapshot,
+safety gates, paper portfolio, pipeline, and links to reproducible evidence. It
+does not call Binance or expose credentials/order functions in the browser.
+
 From the repository root (Python 3.11+; no API key required):
 
 ```bash

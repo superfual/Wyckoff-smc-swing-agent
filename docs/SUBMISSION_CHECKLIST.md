@@ -2,6 +2,7 @@
 
 ## Reproducible proof
 
+- [ ] Open `https://superfual.github.io/Wyckoff-smc-swing-agent/` as the first video shot.
 - [ ] Open the public GitHub repository on branch `main`.
 - [ ] Show the latest green GitHub Actions `Tests` run.
 - [ ] Open Actions → `Control-Room Demo` → `Run workflow`, then show its log.

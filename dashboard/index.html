@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paper-only Binance Spot control room for the Wyckoff + SMC Swing Agent.">
+  <title>Wyckoff + SMC · Spot Control Room</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="Control Room home">
+      <span class="brand-mark" aria-hidden="true">W</span>
+      <span><strong>WYCKOFF + SMC</strong><small>SPOT CONTROL ROOM</small></span>
+    </a>
+    <nav aria-label="Project links">
+      <a href="https://github.com/superfual/Wyckoff-smc-swing-agent">Repository</a>
+      <a href="https://github.com/superfual/Wyckoff-smc-swing-agent/actions">Actions</a>
+      <a class="button" href="https://github.com/superfual/Wyckoff-smc-swing-agent/actions/workflows/control-room-demo.yml">Run demo</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="status-strip" aria-label="System status">
+      <div><span class="pulse"></span><small>SYSTEM</small><strong>VALIDATED</strong></div>
+      <div><small>MODE</small><strong>PAPER ONLY</strong></div>
+      <div><small>MARKET</small><strong>BINANCE SPOT</strong></div>
+      <div><small>REAL ORDERS</small><strong>DISABLED</strong></div>
+    </section>
+
+    <section class="intro grid">
+      <div class="intro-copy">
+        <p class="eyebrow">BINANCE AGENT OS · TRACK A</p>
+        <h1>Capital preservation,<br><span>encoded as an agent.</span></h1>
+        <p class="lede">A defensive swing-trading system that scans liquid Spot markets, verifies closed-candle history, and combines Wyckoff with Smart Money Concepts before risk and execution gates permit any paper action.</p>
+        <div class="safety-row" aria-label="Safety guarantees">
+          <span>Closed candles</span><span>No look-ahead</span><span>Spot only</span><span>No forced signals</span>
+        </div>
+      </div>
+      <aside class="decision-card">
+        <div class="card-head"><span>FINAL LIVE SNAPSHOT</span><span class="live-dot">VERIFIED</span></div>
+        <div class="decision-main">
+          <small>CONTROL-ROOM DECISION</small>
+          <strong>NO BUY</strong>
+          <p>11 candidates reached deep analysis. Every trade remained blocked by the complete thesis, risk, and Spot execution gates.</p>
+        </div>
+        <dl>
+          <div><dt>Decision time</dt><dd>06 Sep · 07:00 UTC</dd></div>
+          <div><dt>Feed</dt><dd>12 / 12 ready</dd></div>
+          <div><dt>Exposure</dt><dd>0.00%</dd></div>
+        </dl>
+      </aside>
+    </section>
+
+    <section class="metrics" aria-label="Validation metrics">
+      <article><small>ACQUISITION</small><strong>12/12</strong><span>symbols complete</span></article>
+      <article><small>PREFLIGHT</small><strong class="green">READY</strong><span>zero feed blockers</span></article>
+      <article><small>DEEP ANALYSIS</small><strong>11</strong><span>selective candidates</span></article>
+      <article><small>PAPER EQUITY</small><strong>$10K</strong><span>0 open positions</span></article>
+      <article><small>TEST SUITE</small><strong>286</strong><span>passing checks</span></article>
+    </section>
+
+    <section class="workspace grid">
+      <div class="panel ranking-panel">
+        <div class="panel-title">
+          <div><p class="eyebrow">MARKET INTELLIGENCE</p><h2>Watchlist ranking</h2></div>
+          <span>Binance MCP snapshot</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Asset</th><th>Interest</th><th>Score</th><th>Spot action</th></tr></thead>
+            <tbody id="ranking-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="panel guard-panel">
+        <div class="panel-title"><div><p class="eyebrow">EXECUTION BOUNDARY</p><h2>Why no trade?</h2></div></div>
+        <div class="guard-flow">
+          <div class="pass"><span>01</span><p><strong>Feed integrity</strong><small>Complete, ordered, fresh</small></p><b>PASS</b></div>
+          <div class="pass"><span>02</span><p><strong>Closed-candle gate</strong><small>Open bars removed</small></p><b>PASS</b></div>
+          <div class="pass"><span>03</span><p><strong>Deep analysis</strong><small>Wyckoff + SMC evaluated</small></p><b>PASS</b></div>
+          <div class="block"><span>04</span><p><strong>Trade qualification</strong><small>Full setup not confirmed</small></p><b>BLOCK</b></div>
+        </div>
+        <p class="guard-note">A high scanner score is an invitation to investigate—not permission to trade.</p>
+      </aside>
+    </section>
+
+    <section class="pipeline-section">
+      <div class="section-heading"><p class="eyebrow">DECISION PIPELINE</p><h2>One-way, fail-closed reasoning</h2></div>
+      <div class="pipeline" aria-label="Agent pipeline">
+        <div><b>01</b><strong>Binance MCP</strong><small>Read-only market data</small></div>
+        <div><b>02</b><strong>Data gates</strong><small>Closed · sufficient · fresh</small></div>
+        <div><b>03</b><strong>Market model</strong><small>Scanner · Wyckoff · SMC</small></div>
+        <div><b>04</b><strong>Decision gates</strong><small>Confluence · thesis · risk</small></div>
+        <div><b>05</b><strong>Paper runtime</strong><small>Spot guard · checkpoint</small></div>
+      </div>
+    </section>
+
+    <section class="proof grid">
+      <div>
+        <p class="eyebrow">AUDITABLE BY DESIGN</p>
+        <h2>Evidence, not promises.</h2>
+        <p>Every important claim is backed by a deterministic demo, a time-bounded live snapshot, or an automated regression. Reviewers can reproduce the paper-only workflow without credentials.</p>
+      </div>
+      <div class="proof-links">
+        <a href="https://github.com/superfual/Wyckoff-smc-swing-agent/actions/workflows/control-room-demo.yml"><span>Reproducible demo</span><b>Run in GitHub Actions ↗</b></a>
+        <a href="https://github.com/superfual/Wyckoff-smc-swing-agent/blob/main/docs/LIVE_CONTROL_ROOM_20260906.md"><span>Real-feed evidence</span><b>Inspect 12-coin snapshot ↗</b></a>
+        <a href="https://github.com/superfual/Wyckoff-smc-swing-agent/actions"><span>Engineering proof</span><b>View green CI ↗</b></a>
+      </div>
+    </section>
+  </main>
+
+  <footer><span>WYCKOFF + SMC SPOT SWING AGENT · V1</span><span>Educational hackathon project · Not financial advice</span></footer>
+  <script src="app.js"></script>
+</body>
+</html>
