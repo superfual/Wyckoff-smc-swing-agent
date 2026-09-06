@@ -190,6 +190,15 @@ The configured 12-symbol Spot watchlist is:
   - explicit PAPER ONLY, closed-candle, no-lookahead, and real-orders-disabled labels
   - optional live `module:function` MCP callback injection without stored credentials
   - README quickstart and a 90-second submission/video checklist
+- Final 12-symbol live Binance MCP control-room capture completed at
+  `2026-09-06 07:00:00 UTC`:
+  - acquisition `12/12`, zero failures
+  - preflight `READY`
+  - closed history `119/239/299/299` for every symbol (`1D/4H/1H/15M`)
+  - 11 symbols selected for deep analysis; all correctly remained `BLOCKED`
+  - AAVEUSDT remained `SCANNED_ONLY`
+  - paper equity `10,000 USDT`, exposure `0%`, open positions `0`, trades `0`
+  - evidence recorded in `docs/LIVE_CONTROL_ROOM_20260906.md`
 
 ## Verified BTC checkpoints
 
@@ -298,12 +307,12 @@ Always inspect the current `main` commit and latest CI instead of assuming this 
 
 Use the completed reproducible package to finish the judge-facing submission:
 
-1. Run one final read-only Binance MCP watchlist/control-room capture outside CI.
-2. Record the 90-second flow in `docs/SUBMISSION_CHECKLIST.md`.
-3. Show the public repository, one-command offline demo, and latest green CI.
-4. Add the final demo-video URL and exact submission fields once available.
-5. Recheck the event deadline, survey, and required social tasks before submission.
-6. Freeze V1 after the submission commit; defer alerts and real execution to post-hackathon work.
+1. Record the 90-second flow in `docs/SUBMISSION_CHECKLIST.md` using the final
+   evidence in `docs/LIVE_CONTROL_ROOM_20260906.md`.
+2. Show the public repository, one-command offline demo, and latest green CI.
+3. Add the final demo-video URL and exact submission fields once available.
+4. Recheck the event deadline, survey, and required social tasks before submission.
+5. Freeze V1 after the submission commit; defer alerts and real execution to post-hackathon work.
 
 Do not expand to autonomous execution. Do not send exchange orders.
 

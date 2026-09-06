@@ -9,6 +9,7 @@
 - [ ] Show acquisition and preflight are `READY` before the paper cycle advances.
 - [ ] Show scanner ranking and at least one deep-analysis result.
 - [ ] Show the portfolio summary and that no real order was submitted.
+- [ ] Open `docs/LIVE_CONTROL_ROOM_20260906.md` as the final 12-coin real-feed evidence.
 - [ ] Run `python -m pytest -q` or show its green CI equivalent.
 
 ## Suggested 90-second video flow
