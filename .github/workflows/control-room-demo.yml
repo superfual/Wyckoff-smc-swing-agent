@@ -1,0 +1,50 @@
+name: Control-Room Demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/control-room-demo.yml"
+      - "scripts/run_control_room_demo.py"
+      - "src/**"
+      - "config/watchlist.json"
+
+permissions:
+  contents: read
+
+jobs:
+  paper-only-demo:
+    name: Run PAPER-ONLY control room
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run deterministic control-room demo
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/run_control_room_demo.py | tee control-room-demo.txt
+
+      - name: Verify safety banner
+        shell: bash
+        run: |
+          grep -F "Mode: PAPER ONLY" control-room-demo.txt
+          grep -F "CLOSED CANDLES ONLY | NO LOOK-AHEAD | REAL ORDERS DISABLED" control-room-demo.txt
+          grep -F "Preflight: READY" control-room-demo.txt
+
+      - name: Upload control-room report
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-room-demo-report
+          path: control-room-demo.txt
+          if-no-files-found: error
+          retention-days: 14

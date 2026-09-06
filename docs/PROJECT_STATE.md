@@ -199,6 +199,13 @@ The configured 12-symbol Spot watchlist is:
   - AAVEUSDT remained `SCANNED_ONLY`
   - paper equity `10,000 USDT`, exposure `0%`, open positions `0`, trades `0`
   - evidence recorded in `docs/LIVE_CONTROL_ROOM_20260906.md`
+- GitHub Actions `Control-Room Demo` workflow added with:
+  - a visible manual `Run workflow` button via `workflow_dispatch`
+  - deterministic `python scripts/run_control_room_demo.py` execution
+  - explicit safety-banner assertions
+  - read-only repository permission
+  - downloadable `control-room-demo-report` artifact
+  - no credentials, live account access, or exchange-order surface
 
 ## Verified BTC checkpoints
 
@@ -309,7 +316,8 @@ Use the completed reproducible package to finish the judge-facing submission:
 
 1. Record the 90-second flow in `docs/SUBMISSION_CHECKLIST.md` using the final
    evidence in `docs/LIVE_CONTROL_ROOM_20260906.md`.
-2. Show the public repository, one-command offline demo, and latest green CI.
+2. Show the public repository, run `Control-Room Demo` from the Actions tab,
+   and show the latest green CI.
 3. Add the final demo-video URL and exact submission fields once available.
 4. Recheck the event deadline, survey, and required social tasks before submission.
 5. Freeze V1 after the submission commit; defer alerts and real execution to post-hackathon work.

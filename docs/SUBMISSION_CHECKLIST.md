@@ -4,6 +4,7 @@
 
 - [ ] Open the public GitHub repository on branch `main`.
 - [ ] Show the latest green GitHub Actions `Tests` run.
+- [ ] Open Actions → `Control-Room Demo` → `Run workflow`, then show its log.
 - [ ] Run `python scripts/run_control_room_demo.py` from the repository root.
 - [ ] Point out `PAPER ONLY`, `CLOSED CANDLES ONLY`, `NO LOOK-AHEAD`, and `REAL ORDERS DISABLED`.
 - [ ] Show acquisition and preflight are `READY` before the paper cycle advances.
