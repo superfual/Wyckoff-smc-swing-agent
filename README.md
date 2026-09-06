@@ -1050,6 +1050,20 @@ Potential future improvements include:
 - Configurable risk profiles
 - Enhanced execution workflows
 
+
+---
+
+### V4 — Guarded Binance Spot Execution
+
+The post-hackathon direction is a live Spot execution adapter isolated behind an
+Agentic Sub-account, minimum permissions, capped exposure, idempotent orders,
+fill reconciliation, circuit breakers, and an emergency kill switch.
+
+V1 remains PAPER ONLY. This is a documented expansion path, not a claim that the
+current repository submits exchange orders.
+
+See [Guarded Live Spot Execution Roadmap](docs/LIVE_SPOT_EXECUTION_ROADMAP.md).
+
 ---
 
 ## 🧠 Core Philosophy

@@ -214,6 +214,18 @@ The configured 12-symbol Spot watchlist is:
   - direct links to the reproducible demo, live evidence, CI, and repository
   - no client-side Binance calls, credentials, account access, or order surface
 
+
+- Post-hackathon guarded live Spot execution roadmap documented with:
+  - Agentic Sub-account isolation from the main account
+  - minimum-permission Spot-only credential boundary
+  - disabled-by-default live feature flag
+  - idempotent client order IDs and uncertain-order reconciliation
+  - symbol-filter, notional, step-size, and precision validation
+  - partial-fill handling, portfolio caps, circuit breakers, and kill switch
+  - staged rollout from replay to paper, read-only, manual-confirm, and capped automation
+  - an explicit statement that V1 remains PAPER ONLY
+  - details in `docs/LIVE_SPOT_EXECUTION_ROADMAP.md`
+
 ## Verified BTC checkpoints
 
 ### Canonical deterministic regression
