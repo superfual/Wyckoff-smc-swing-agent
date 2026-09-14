@@ -1,6 +1,6 @@
 # Chart Snapshot Standard — Post-Hackathon
 
-This standard applies to automated Wyckoff–SMC snapshots created after the hackathon submission.
+This standard applies whenever the user says **"tạo chart snapshot"**.
 
 ## Design rule: three information layers
 
@@ -10,6 +10,8 @@ This standard applies to automated Wyckoff–SMC snapshots created after the hac
 
 ## Visual constraints
 
+- Reserve visible space to the right of the latest candle for the future scenario.
+- Extend the conditional arrow into that future space so it does not end inside the current candle cluster.
 - Do not display paragraphs, conclusions, confidence explanations, or trade instructions inside the chart.
 - Do not display every pivot. Internal pivots remain calculation inputs only.
 - Show no more than two active zones.
