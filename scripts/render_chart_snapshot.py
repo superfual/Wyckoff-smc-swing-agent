@@ -12,6 +12,7 @@ rows = [r for r in rows if int(r[6]) < now_ms][-160:]
 o=[float(r[1]) for r in rows]; h=[float(r[2]) for r in rows]; l=[float(r[3]) for r in rows]
 c=[float(r[4]) for r in rows]; v=[float(r[5]) for r in rows]
 n=len(rows); x=list(range(n))
+future_x = n + 10
 
 bg='#101214'; grid='#272b2f'; up='#6FD6BE'; down='#F28B91'; gold='#E9C46A'; cyan='#8BD3DD'; red='#F2A1A8'; blue='#8FB3D9'
 fig,(ax,av)=plt.subplots(2,1,figsize=(14,8),gridspec_kw={'height_ratios':[4.2,1]},sharex=True)
@@ -40,12 +41,12 @@ recent_hi=piv_hi[-4:]; recent_lo=piv_lo[-4:]
 # Evidence-led zones from recent confirmed pivots
 if recent_hi:
     ph=recent_hi[-1]; zlo=min(o[ph],c[ph]); zhi=h[ph]
-    ax.add_patch(Rectangle((ph,zlo),n-1-ph,zhi-zlo,facecolor=red,alpha=.18,edgecolor=red,linewidth=1))
-    ax.text(n-2,zhi,f'SUPPLY {zhi:.{4 if zhi < 10 else 2}f}',color=red,ha='right',va='bottom',fontsize=10,fontweight='bold')
+    ax.add_patch(Rectangle((ph,zlo),future_x-ph,zhi-zlo,facecolor=red,alpha=.18,edgecolor=red,linewidth=1))
+    ax.text(future_x-1,zhi,f'SUPPLY {zhi:.{4 if zhi < 10 else 2}f}',color=red,ha='right',va='bottom',fontsize=10,fontweight='bold')
 if recent_lo:
     pl=recent_lo[-1]; zlo=l[pl]; zhi=max(o[pl],c[pl])
-    ax.add_patch(Rectangle((pl,zlo),n-1-pl,zhi-zlo,facecolor=blue,alpha=.18,edgecolor=blue,linewidth=1))
-    ax.text(n-2,zlo,f'BOS ↓ {zlo:.{4 if zlo < 10 else 2}f}',color=cyan,ha='right',va='top',fontsize=10,fontweight='bold')
+    ax.add_patch(Rectangle((pl,zlo),future_x-pl,zhi-zlo,facecolor=blue,alpha=.18,edgecolor=blue,linewidth=1))
+    ax.text(future_x-1,zlo,f'BOS ↓ {zlo:.{4 if zlo < 10 else 2}f}',color=cyan,ha='right',va='top',fontsize=10,fontweight='bold')
 
 # Bias based on the latest closed price versus most recent confirmed swing levels
 last=c[-1]; last_hi=h[recent_hi[-1]] if recent_hi else max(h[-30:]); last_lo=l[recent_lo[-1]] if recent_lo else min(l[-30:])
@@ -64,7 +65,7 @@ ax.text(.015,.965,f'{symbol} · {timeframe} · BINANCE SPOT',transform=ax.transA
 
 # Conditional path, never presented as certainty
 target=last_lo
-ax.annotate('',xy=(n-2,target),xytext=(n-24,last),arrowprops=dict(arrowstyle='-|>',color=red,lw=3,alpha=.9))
+ax.annotate('',xy=(future_x,target),xytext=(n-24,last),arrowprops=dict(arrowstyle='-|>',color=red,lw=3,alpha=.9))
 ax.text(n-23,last*1.006,'IF BREAK',color=red,fontsize=9,fontweight='bold')
 
 step=max(1,n//8)
@@ -72,7 +73,7 @@ ticks=list(range(0,n,step))
 labels=[datetime.fromtimestamp(int(rows[i][0])/1000,timezone.utc).strftime('%b %d\n%H:%M') for i in ticks]
 av.set_xticks(ticks); av.set_xticklabels(labels,color='#c8cdd2',fontsize=9)
 av.set_ylabel('Volume',color='#c8cdd2'); ax.set_ylabel('USDT',color='#c8cdd2')
-ax.set_xlim(-1,n+5); ax.set_ylim(min(l)*.965,max(h)*1.035)
+ax.set_xlim(-1,n+16); ax.set_ylim(min(l)*.965,max(h)*1.035)
 plt.tight_layout()
 plt.savefig(out,dpi=100,bbox_inches='tight',facecolor=fig.get_facecolor())
 print(json.dumps({'file':out,'closed_candles':n,'last_close':last,'bias':bias,'swing_high':last_hi,'swing_low':last_lo}))
