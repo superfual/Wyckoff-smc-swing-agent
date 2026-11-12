@@ -1,5 +1,8 @@
 """Offline tests for strict USD-M public candle acquisition."""
 import unittest
+import tempfile
+from pathlib import Path
+from src.futures_chart import render_chart
 
 from src.binance_public_futures import FuturesDataError, fetch_closed_klines, collect_futures_market, INTERVAL_MS, LIMITS
 
@@ -57,6 +60,26 @@ class TestBinancePublicFutures(unittest.TestCase):
     def test_symbol_validation(self):
         with self.assertRaisesRegex(FuturesDataError, "INVALID_FUTURES_SYMBOL"):
             fetch_closed_klines("BTCUSDT&foo=bar", "1h", 300, now_ms=self.NOW, request_json=lambda _: [])
+
+
+    def test_chart_uses_verified_candle_prices(self):
+        def fake_request(url):
+            interval = url.split("interval=")[1].split("&")[0]
+            return candles(interval, self.NOW, LIMITS[interval] + 5)
+        market = collect_futures_market("ZECUSDT", now_ms=self.NOW, request_json=fake_request)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = render_chart(market, "H4", Path(tmp) / "chart.svg")
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("ZECUSDT", content)
+            self.assertIn("105.0000", content)
+            self.assertIn("<svg", content)
+
+    def test_cli_timeframe_and_mode_validation(self):
+        from scripts.run_public_futures_signal import run
+        with self.assertRaisesRegex(ValueError, "Unsupported timeframe"):
+            run("BTCUSDT", timeframe="W1")
+        with self.assertRaisesRegex(ValueError, "Unsupported mode"):
+            run("BTCUSDT", mode="trade")
 
 if __name__ == "__main__":
     unittest.main()
