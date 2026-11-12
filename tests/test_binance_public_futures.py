@@ -58,5 +58,13 @@ class TestBinancePublicFutures(unittest.TestCase):
         with self.assertRaisesRegex(FuturesDataError, "INVALID_FUTURES_SYMBOL"):
             fetch_closed_klines("BTCUSDT&foo=bar", "1h", 300, now_ms=self.NOW, request_json=lambda _: [])
 
+
+    def test_cli_timeframe_and_mode_validation(self):
+        from scripts.run_public_futures_signal import run
+        with self.assertRaisesRegex(ValueError, "Unsupported timeframe"):
+            run("BTCUSDT", timeframe="W1")
+        with self.assertRaisesRegex(ValueError, "Unsupported mode"):
+            run("BTCUSDT", mode="trade")
+
 if __name__ == "__main__":
     unittest.main()
