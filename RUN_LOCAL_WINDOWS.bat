@@ -21,10 +21,11 @@ if "%TIMEFRAME%"=="" set "TIMEFRAME=H4"
 if not "%EXTRA%"=="" (echo Enter only SYMBOL TIMEFRAME.&pause&exit /b 1)
 echo.
 echo Requesting verified closed candles for %SYMBOL% on %TIMEFRAME% ...
-%PY% -m scripts.run_public_futures_signal --symbol "%SYMBOL%" --timeframe "%TIMEFRAME%" --mode deep --output "reports\public_futures_signal.json"
+%PY% -m scripts.run_public_futures_signal --symbol "%SYMBOL%" --timeframe "%TIMEFRAME%" --mode deep --output "reports\public_futures_signal.json" --chart-output "reports\futures_chart.svg"
 set "RESULT=%errorlevel%"
 echo.
 echo Report: %CD%\reports\public_futures_signal.json
+echo Chart: %CD%\reports\futures_chart.svg
 if not "%RESULT%"=="0" echo DATA UNAVAILABLE OR ERROR - NO TRADE SIGNAL
 echo This report is research only; manually review before any trade.
 pause
