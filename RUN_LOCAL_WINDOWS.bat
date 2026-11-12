@@ -13,12 +13,15 @@ if %errorlevel%==0 (set "PY=py -3") else (
   if errorlevel 1 (echo Python 3 is not installed or not on PATH.&echo Install Python from https://www.python.org/downloads/windows/&pause&exit /b 1)
   set "PY=python"
 )
-set "SYMBOL=BTCUSDT"
-set /p "SYMBOL=Futures symbol [BTCUSDT]: "
-if "%SYMBOL%"=="" set "SYMBOL=BTCUSDT"
+set "REQUEST="
+set /p "REQUEST=Symbol and timeframe [BTCUSDT H4]: "
+if "%REQUEST%"=="" set "REQUEST=BTCUSDT H4"
+for /f "tokens=1,2,3" %%A in ("%REQUEST%") do (set "SYMBOL=%%A"&set "TIMEFRAME=%%B"&set "EXTRA=%%C")
+if "%TIMEFRAME%"=="" set "TIMEFRAME=H4"
+if not "%EXTRA%"=="" (echo Enter only SYMBOL TIMEFRAME.&pause&exit /b 1)
 echo.
-echo Requesting verified closed candles for %SYMBOL% ...
-%PY% -m scripts.run_public_futures_signal --symbol "%SYMBOL%" --output "reports\public_futures_signal.json"
+echo Requesting verified closed candles for %SYMBOL% on %TIMEFRAME% ...
+%PY% -m scripts.run_public_futures_signal --symbol "%SYMBOL%" --timeframe "%TIMEFRAME%" --mode deep --output "reports\public_futures_signal.json"
 set "RESULT=%errorlevel%"
 echo.
 echo Report: %CD%\reports\public_futures_signal.json
