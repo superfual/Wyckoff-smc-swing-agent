@@ -8,8 +8,6 @@ on:
         required: true
         default: BTCUSDT
         type: string
-  schedule:
-    - cron: '7 * * * *'
   push:
     branches:
       - feature/binance-public-futures-fallback
