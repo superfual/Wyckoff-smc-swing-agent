@@ -5,8 +5,7 @@ It requests official USD-M Futures /fapi/v1/klines without keys, secrets or trad
 
 ## Launch
 After merge: Actions > Public Futures Wyckoff-SMC (read-only) > Run workflow.
-Input example: BTCUSDT. The job also schedules at 07 minutes past each UTC hour.
-Scheduled runs may be delayed by GitHub and only run on the default branch.
+Input example: BTCUSDT. Automatic hourly scheduling is intentionally disabled until the API can be reached from the runner.
 Download the futures-signal artifact containing the JSON report (retained 7 days).
 
 ## Hard data gates
@@ -24,4 +23,4 @@ Download the futures-signal artifact containing the JSON report (retained 7 days
 Run: python -m unittest tests/test_binance_public_futures.py -v
 
 The workflow grants read-only repository permissions, never places orders, and requires no API key.
-GitHub-hosted runner network access to Binance is not guaranteed; blocked IPs fail closed.
+GitHub-hosted runner network access to Binance is not guaranteed; blocked IPs fail closed. On the first live test, Binance returned an HTTP error from the GitHub runner; do not assume automatic collection works until a successful live run.
