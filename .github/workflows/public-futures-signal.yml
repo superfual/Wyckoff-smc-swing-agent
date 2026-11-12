@@ -1,0 +1,46 @@
+name: Public Futures Wyckoff-SMC (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: Binance USD-M Futures pair
+        required: true
+        default: BTCUSDT
+        type: string
+  push:
+    branches:
+      - feature/binance-public-futures-fallback
+    paths:
+      - 'src/binance_public_futures.py'
+      - 'scripts/run_public_futures_signal.py'
+      - 'tests/test_binance_public_futures.py'
+      - '.github/workflows/public-futures-signal.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-public-feed-and-analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: .
+      SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline validator tests
+        run: python -m unittest tests/test_binance_public_futures.py -v
+      - name: Fetch verified public Futures candles and analyze
+        run: python scripts/run_public_futures_signal.py --symbol "$SYMBOL" --output reports/public_futures_signal.json
+      - name: Upload audit report (including no-data failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-signal-${{ github.run_id }}
+          path: reports/public_futures_signal.json
+          if-no-files-found: warn
+          retention-days: 7
