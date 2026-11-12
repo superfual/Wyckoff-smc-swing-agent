@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "PYTHONPATH=%CD%;%PYTHONPATH%"
 title Fual Wyckoff-SMC - Local Futures Analyst
 echo ==========================================
 echo    FUAL LOCAL WYCKOFF-SMC ANALYST
@@ -17,7 +18,7 @@ set /p "SYMBOL=Futures symbol [BTCUSDT]: "
 if "%SYMBOL%"=="" set "SYMBOL=BTCUSDT"
 echo.
 echo Requesting verified closed candles for %SYMBOL% ...
-%PY% scripts\run_public_futures_signal.py --symbol "%SYMBOL%" --output "reports\public_futures_signal.json"
+%PY% -m scripts.run_public_futures_signal --symbol "%SYMBOL%" --output "reports\public_futures_signal.json"
 set "RESULT=%errorlevel%"
 echo.
 echo Report: %CD%\reports\public_futures_signal.json
