@@ -31,7 +31,9 @@ def _read_public_json(url: str) -> object:
     try:
         with urlopen(request, timeout=18) as response:
             return json.load(response)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except HTTPError as exc:
+        raise FuturesDataError(f"BINANCE_PUBLIC_HTTP_{exc.code}") from exc
+    except (URLError, TimeoutError, ValueError) as exc:
         raise FuturesDataError("BINANCE_PUBLIC_API_UNAVAILABLE:" + type(exc).__name__) from exc
 
 
